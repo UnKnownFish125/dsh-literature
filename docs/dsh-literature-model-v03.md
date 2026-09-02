@@ -4,6 +4,28 @@
 > 定位修正：dsh-literature（**不是 literatum**）不是"文献管理库"，也不是"deepmemory 查询代理"——
 > 它是 **完整的知识库 + 归档体系**：管理原料→归档→加工→知识的全生命周期，
 > 与 deepmemory 建立**专属对接**（deepmemory 是原料来源之一，literature 是知识的组织者）。
+> 修订：v0.3.1（2026-09-03）按 glm 审核补 H2（taxonomy 所有权）/H3（环境基线表）/M3（单服务迁移路径）/M5（模型名）+ 运维清理。
+
+---
+
+## 0. 环境基线表（H3，绝对路径唯一事实源，2026-09-03 核对）
+
+| 角色 | 绝对路径 / 标识 | 状态 |
+|---|---|---|
+| **literature 源码仓库（权威）** | `/www/dsh-literature-repo` ↔ Gitea `LazyFish/dsh-literature`（master） | ✅ 唯一主仓（kb 已并入，e032933 起） |
+| **literature 文献库部署（生产）** | `/www/dsh-literature-deploy/literature-server` + `dsh-literature.service` | 6260，回环 |
+| **literature kb 查询部署（生产）** | `/www/dsh-literature-deploy/kb-server` + `dsh-literature-kb.service` | 6262，回环 |
+| **literature kb 测试部署** | `/www/dsh-test-literature-kb` + `dsh-test-literature-kb.service` | 6261，回环 |
+| **deepmemory 活跃开发树** | `/www/deepseek harness workspace/harness-memory-archive`（server.py=生产） | ✅ 权威 |
+| **deepmemory Gitea** | `LazyFish/dsh-deepmemory`（已改名，id 10） | 本地克隆可能落后，以活跃树为准 |
+| **deepmemory 生产** | `/www/deepmemory-v063-deploy/memory-server` + `dsh-memory-server.service` | 6230 |
+| **deepmemory 测试** | `/www/dsh-test-memory` + `dsh-test-memory.service` | 6240 |
+| **deepmemory web home** | `/www/dsh/home`（DSH_HOME） | 插件/preset 安装处 |
+| **向量服务** | `embedding-bgem3.service`(6192) / `embedding-qwen3.service`(6193) | bge-m3/Qwen3，1024 维 |
+| **legacy 归档** | `/www/legacy-literatum-archive`（dsh-literatum* 全部残留） | 冻结勿用 |
+| **Gitea legacy** | `LazyFish/dsh-literatum-legacy` | 冻结勿用 |
+
+**纪律**：deepmemory 侧实施以**活跃开发树**（harness-memory-archive）为准，勿用落后的 Gitea 本地克隆；literature 侧以 `/www/dsh-literature-repo` 为准。
 
 ---
 
@@ -24,7 +46,7 @@ dsh-literature 是面向 agent 与科研的**知识库与归档中枢**：文献
 | 3 | "deepmemory 应该只具备访问库的能力，他应该向你查询，向你发起申请，库管理也是类似" | deepmemory = 记忆存取层（无库概念）；literature = 知识组织者，接受 deepmemory 的查询/申请 |
 | 4 | "记忆不应该直接进入知识库，这是记忆，应该被加工过了" | 流水线：原料 → 加工 → 知识（记忆/对话是原料） |
 | 5 | "每天晚上的谷价"（低谷时段）+ "半夜基本不用 dsh" | **夜间加工管线**：默认低谷时段批量加工 |
-| 6 | "默认使用 uuapi v4 flash 0731" | 加工模型默认 `uuapi/v4-flash-0731`（便宜模型跑默认加工，配置可暴露） |
+| 6 | "默认使用 uuapi v4 flash 0731" | 加工模型默认 **`deepseek-v4-flash-0731`（经 uuapi 网关）**（M5 修正：deepmemory 实际在用名；便宜模型跑默认加工，配置可暴露） |
 | 7 | "配置要可暴露，也有 agent 和手动直接输入渠道" | 加工管线配置可查；输入三渠道：自动/agent/手动 |
 | 8 | "知识挂载可以先进缓存区" | **待加工缓存区**：新原料/知识先入缓存，不直接入知识库 |
 | 9 | "挂载点应该是可溯源的源点" | 挂载点（primary/secondary）引用归档源，可溯源 |
@@ -61,7 +83,7 @@ dsh-literature 是面向 agent 与科研的**知识库与归档中枢**：文献
 │  └───────────────────────────────────────────────────────────────────────┘     │
 │                          ▼ 夜间管线（低谷时段，裁决 5/6）                     │
 │  ┌─ 加工层（夜间批量）──────────────────────────────────────────────────┐     │
-│  │  · 默认模型 uuapi/v4-flash-0731（便宜），配置可暴露                   │     │
+│  │  · 默认模型 deepseek-v4-flash-0731（经 uuapi 网关，M5），配置可暴露    │     │
 │  │  · 输入三渠道：自动(缓存) / agent 提交 / 手动输入                     │     │
 │  │  · 产出：结构化知识条目（提炼，非原文）+ 主挂载判定                    │     │
 │  └───────────────────────────────────────────────────────────────────────┘     │
@@ -98,6 +120,25 @@ literature 侧（对接模块）：
   · 接受 deepmemory/agent 的知识查询 → 走本库知识检索
   · 接受分类申请 → 本库分类树管理后反馈
 ```
+
+---
+
+## 3.5 taxonomy 所有权（H2，glm 审核新增——双 taxonomy 归属闭环）
+
+**问题**：deepmemory 分库已上生产（bias/core/eco/project/runtime 在 deepmemory 侧），而 literature 又要建自己的分类树——两个 taxonomy 并存，必须钉死关系。
+
+**裁决**：
+| 层 | 权威 | 作用 |
+|---|---|---|
+| **literature 分类树** | **权威（source of truth）** | 知识的组织/挂载/派生/权限——真正语义所在 |
+| **deepmemory library 标签** | 降级为**扁平回写标签** | 由 literature 对接流程决定后**回写**到 deepmemory documents.library，仅用于 deepmemory 检索侧过滤 |
+
+**同步规则**：
+- literature 分类树变更（派生/归类/改挂）→ 触发 deepmemory 侧 library 标签回写（走对接/管理申请）
+- deepmemory 的 library 值域从"语义定义"降为"镜像缓存"——bias 库 4 条等现存数据由 literature 首次对接时纳入其 bias 全局树并校验 scope=global
+- 双向不一致时以 literature 树为准（deepmemory 标签仅加速检索，不作为组织依据）
+
+**现状桥接**：deepmemory 已归类（bias 4/core 45/project 34/runtime ~254）+ 库触发器重建（bias 需 scope=global 已强制）。literature 分类树实现时，将这些 deepmemory library 映射为其树根节点，首轮全量对账后进入回写模式。
 
 ---
 
@@ -170,6 +211,18 @@ workspace:deepseek-harness
 | docs/ | 契约 v0.2 + v3.1 方案 | 保留历史，v0.3 为现行模型 |
 | dsh-literatum 仓库 | Gitea 已改 legacy | 冻结 |
 
+### 7.1 单服务目标态与迁移路径（M3，glm 审核修正）
+
+**现状（中间态）**：6260（文献库）与 6262（kb 查询）双服务并存——文档 §2 的"单服务"与 §7 的"6262 在跑"表述矛盾，此处钉死。
+
+| 阶段 | 端口 | 说明 |
+|---|---|---|
+| **现在（双服务）** | 6260 = literature-server（文献/原料 CRUD）；6262 = kb-server（知识查询代理） | web 代理 `/lit-api` 分流：`/v1/literature/kb/*` → 6262，其余 → 6260（H1 已实现） |
+| **目标（单服务）** | 6260 = 完整 literature（文献+归档+缓存+加工+知识库+分类树全在一进程） | 6262 kb 功能并入 6260；6262 退役 |
+| **迁移路径** | v0.3 落地时：先实现归档层+分类树于 6260 → kb 查询改指 6260（代理分流规则删）→ 6262 停 | 迁移期间端口分工如上表，代理分流规则保留直到 kb 并入 |
+
+**代理分流现状**（生产 index.js 已实现）：`KB_TARGET_PORT=6262` 默认，`LITERATURE_KB_SERVER_PORT` 可配；kb 并入 6260 后将 `KB_TARGET_PORT` 指向 6260 或删分流。
+
 ---
 
 ## 8. 待定/开放问题（后续评审）
@@ -177,6 +230,6 @@ workspace:deepseek-harness
 1. 归档存储格式：原样文件 + sqlite 索引？还是全文入库？
 2. 夜间管线调度：cron？DSH 定时器？跨天处理失败重试策略？
 3. 加工产出知识条目的 schema（提炼什么字段：结论/方法/来源引用？）
-4. uuapi 接口接入细节（模型名 `uuapi/v4-flash-0731` 的 provider/model 映射）
+4. 加工模型接入（deepseek-v4-flash-0731 经 uuapi 网关；重试/fallback 抄 deepmemory 经验——sources 有 502 波动与 fallback 记录）
 5. 缓存区 TTL 与容量上限（防积压）
 6. "带原始对话的归档导出"具体接口形态（deepmemory 契约修订范围）

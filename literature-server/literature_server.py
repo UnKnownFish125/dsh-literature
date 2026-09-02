@@ -412,7 +412,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"literature server listening on {PORT} (db={DB_PATH})", flush=True)
     try:
         httpd.serve_forever()

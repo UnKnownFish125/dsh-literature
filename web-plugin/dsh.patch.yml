@@ -1,0 +1,4 @@
+# The dsh-literature bundle patch: registers the independent task board UI surface.
+- insert:
+    - id: literatum
+      name: 'dsh-literature'

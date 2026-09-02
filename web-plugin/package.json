@@ -1,0 +1,43 @@
+{
+  "name": "dsh-literature",
+  "version": "0.1.0",
+  "description": "dsh-literature 文献/证据/知识管理插件（独立，deepmemory 派生）：/lit-api 代理 + 文献库 UI",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "dsh": {
+    "category": "Memory",
+    "categories": [
+      "Memory"
+    ],
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./dsh.patch.yml"
+    }
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./dsh.patch.yml": "./dsh.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "dsh.patch.yml",
+    "package.json"
+  ],
+  "license": "AGPL-3.0-only",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.6 <0.2",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/cordis": "^4.0.0"
+  }
+}

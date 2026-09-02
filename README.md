@@ -150,3 +150,8 @@ python3 -m unittest tests.test_literatum -v   # 8 个测试：域层 + HTTP + �
 ## 许可
 
 AGPL-3.0-only（与派生源 dsh-deepmemory 一致，见 [LICENSE](./LICENSE)）
+
+## 知识库查询（kb 体系）
+- `kb-server/`：知识查询服务（6262，代理 deepmemory 只读）
+- `agent-preset/kb-plugin/plugin-v1.js`：kb_query / kb_browse / kb_constraints / kb_contracts / kb_graph 五工具
+- 文档：`docs/dsh-literature-kb-dev-plan.md`（模型 v0.3 演进中）

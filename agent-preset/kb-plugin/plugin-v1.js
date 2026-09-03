@@ -73,9 +73,16 @@ export function apply(ctx) {
     },
     output: { schema: outSchema, render: textRender },
     async execute(args) {
+      if (args.archived) {
+        // archived=true → 枚举本地 literature 归档知识（/knowledge-browse，本地权威）
+        const q = []
+        if (args.library) q.push(`library=${encodeURIComponent(args.library)}`)
+        q.push('archived=true')
+        const data = await api(`/knowledge-browse${q.length ? '?' + q.join('&') : ''}`)
+        return { ok: true, items: data.items, archived: true }
+      }
       const q = []
       if (args.library) q.push(`library=${encodeURIComponent(args.library)}`)
-      if (args.archived) q.push('archived=true')
       const data = await api(`/kb/browse${q.length ? '?' + q.join('&') : ''}`)
       return { ok: true, libraries: data.libraries }
     },

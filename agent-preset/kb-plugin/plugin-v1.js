@@ -117,7 +117,7 @@ export function apply(ctx) {
     output: { schema: outSchema, render: textRender },
     async execute(args) {
       const body = { library: args.library, reason: args.reason || '' }
-      const data = await api('/kb/archive-library', { method: 'POST', body })
+      const data = await api('/archive-library', { method: 'POST', body })
       return { ok: true, archived: data.archived, count: data.count }
     },
   })))

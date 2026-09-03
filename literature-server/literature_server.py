@@ -18,6 +18,8 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import literature_upstream as UP  # 单服务合并：deepmemory 上游（search/libraries/list/graph）
+
 from literature_domain import (
     ConflictError,
     DomainError,
@@ -220,6 +222,44 @@ class Handler(BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
 
+            # ==== kb 查询路由（单服务合并，deepmemory 上游，H2 kb-server 归入 6260）====
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "browse":
+                st, data = UP.upstream("GET", "/v1/memories/libraries")
+                if st != 200:
+                    return self._send(503 if st == 503 else st, data)
+                libs = data.get("libraries", {})
+                library = qs.get("library", [""])[0]
+                if library and library in libs:
+                    libs = {library: libs[library]}
+                return self._send(200, {"libraries": libs})
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "constraints":
+                ws = qs.get("workspace_id", [UP.DEFAULT_WORKSPACE])[0]
+                k = int(qs.get("k", ["50"])[0])
+                st, mems = UP.list_memories(ws)
+                if st != 200:
+                    return self._send(503 if st == 503 else st, {"error": "upstream list failed"})
+                bias = [m for m in mems if m.get("library") == "bias"]
+                bias.sort(key=lambda m: float(m.get("importance") or 0), reverse=True)
+                return self._send(200, {"constraints": bias[:k], "count": len(bias),
+                                        "note": "" if bias else "bias 库为空（需存量归类）"})
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "contracts":
+                topic = qs.get("topic", [""])[0]
+                ws = qs.get("workspace_id", [UP.DEFAULT_WORKSPACE])[0]
+                k = int(qs.get("k", ["20"])[0])
+                st, mems = UP.list_memories(ws)
+                if st != 200:
+                    return self._send(503 if st == 503 else st, {"error": "upstream list failed"})
+                core = [m for m in mems if m.get("library") == "core"]
+                if topic:
+                    core = [m for m in core if topic in (m.get("content") or "")]
+                core.sort(key=lambda m: float(m.get("importance") or 0), reverse=True)
+                return self._send(200, {"contracts": core[:k], "count": len(core)})
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "graph":
+                st, data = UP.upstream("GET", "/v1/graph/memories")
+                if st != 200:
+                    return self._send(503 if st == 503 else st, data)
+                return self._send(200, {"graph": data})
+
             # /v1/literature/attachments/<file>?t=<signed>
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "attachments"]:
                 file_name = parts[3]
@@ -297,6 +337,60 @@ class Handler(BaseHTTPRequestHandler):
 
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "config":
                 return self._v2_call(lambda: self._send(200, {"config": store.set_settings(body)}))
+            # ==== kb/query（单服务合并：本地知识 + deepmemory RRF 融合，N3）====
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "query":
+                q = str(body.get("query") or "").strip()
+                if not q:
+                    return self._send(400, {"error": "query is required"})
+                k = int(body.get("k") or 5)
+                mode = str(body.get("mode") or "auto")
+                ws = str(body.get("workspace_id") or UP.DEFAULT_WORKSPACE)
+                lib = body.get("library") or None
+                # 本地知识（向量+RRF）——knowledge-only / hybrid
+                local_results = []
+                if mode != "deepmemory-only":
+                    try:
+                        local_results = store.search_knowledge(q, k=k * 2, workspace_id=ws, library=lib)
+                    except Exception:
+                        local_results = []
+                # deepmemory 记忆——deepmemory-only / hybrid
+                mem_results = []
+                if mode != "knowledge-only":
+                    payload = {"query": q, "k": k * 2, "include_archived": False, "workspace_id": ws}
+                    if lib:
+                        payload["library"] = lib
+                    st, data = UP.upstream("POST", "/v1/memories/search", payload)
+                    if st == 200:
+                        mem_results = data.get("results", [])
+                # RRF 融合
+                RRF_K = 60
+                scores, src = {}, {}
+                for rank, r in enumerate(mem_results):
+                    rid = "mem:" + str(r.get("id"))
+                    scores[rid] = scores.get(rid, 0) + 1.0 / (RRF_K + rank + 1)
+                    src[rid] = {"kind": "deepmemory", "payload": dict(r)}
+                for rank, r in enumerate(local_results):
+                    rid = "kn:" + str(r.get("id"))
+                    scores[rid] = scores.get(rid, 0) + 1.0 / (RRF_K + rank + 1)
+                    src[rid] = {"kind": "literature", "payload": dict(r)}
+                ranked = sorted(scores.items(), key=lambda x: -x[1])[:k]
+                results = []
+                for rid, _ in ranked:
+                    it = src[rid]
+                    p_ = it["payload"]
+                    p_["source"] = it["kind"]
+                    results.append(p_)
+                # auto：知识量≥50 切纯知识（查询本地 count）
+                kn_total = 0
+                if mode == "auto":
+                    try:
+                        kn_total = store.count_knowledge(workspace_id=ws)
+                    except Exception:
+                        kn_total = 0
+                    if kn_total >= 50:
+                        results = [r for r in results if r.get("source") == "literature"][:k]
+                return self._send(200, {"query": q, "count": len(results), "mode": mode,
+                                        "results": results, "knowledge_count": kn_total})
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "documents":
                 return self._v2_call(lambda: self._send(200, {"document": store.create_document(body)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "evidence":

@@ -31,10 +31,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 ATTACHMENT_DIR = os.path.join(DATA_DIR, "attachments")
 DB_PATH = os.path.join(DATA_DIR, "literature.db")
-API_TOKEN_FILE = os.environ.get("LITERATUM_API_TOKEN_FILE", os.path.join(DATA_DIR, "api-token"))
+API_TOKEN_FILE = os.environ.get("LITERATURE_API_TOKEN_FILE", os.path.join(DATA_DIR, "api-token"))
 SIGNING_KEY_FILE = os.path.join(DATA_DIR, "attachment-signing-key")
-PORT = int(os.environ.get("LITERATUM_SERVER_PORT", "6260"))
-MAX_BODY_BYTES = int(os.environ.get("LITERATUM_MAX_BODY_BYTES", str(50 * 1024 * 1024)))
+PORT = int(os.environ.get("LITERATURE_SERVER_PORT", "6260"))
+MAX_BODY_BYTES = int(os.environ.get("LITERATURE_MAX_BODY_BYTES", str(50 * 1024 * 1024)))
 ATTACHMENT_TTL_SECONDS = 300  # 5 分钟
 
 # 插件配置页（设置 → 插件 → 插件配置）schema：与 config_schema.json 同构

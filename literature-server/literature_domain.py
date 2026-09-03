@@ -761,22 +761,42 @@ class LiteratumStore:
 
     # ------------------------------------------------------------ graph
 
-    def graph(self, workspace_id=""):
-        """概念网络：nodes = knowledge_items, edges = knowledge_relations（workspace 硬过滤）。"""
+    def graph(self, workspace_id="", library=None):
+        """概念网络：nodes = knowledge_items, edges = knowledge_relations（workspace/library 过滤，library 可选）。"""
         with self._connect() as conn:
-            nodes = conn.execute(
-                "SELECT id, concept FROM knowledge_items WHERE workspace_id=? AND deleted_at IS NULL"
-                " ORDER BY id", (workspace_id,),
-            ).fetchall()
-            edges = conn.execute(
-                "SELECT r.source_id, r.target_id, r.relation,"
-                " s.concept AS source_concept, t.concept AS target_concept"
-                " FROM knowledge_relations r"
-                " JOIN knowledge_items s ON s.id=r.source_id AND s.deleted_at IS NULL"
-                " JOIN knowledge_items t ON t.id=r.target_id AND t.deleted_at IS NULL"
-                " WHERE r.workspace_id=? AND r.deleted_at IS NULL ORDER BY r.id",
-                (workspace_id,),
-            ).fetchall()
+            node_sql = "SELECT id, concept, library FROM knowledge_items WHERE deleted_at IS NULL"
+            node_args = []
+            if workspace_id:
+                node_sql += " AND workspace_id=?"
+                node_args.append(workspace_id)
+            if library:
+                node_sql += " AND library=?"
+                node_args.append(library)
+            node_sql += " ORDER BY id"
+            nodes = conn.execute(node_sql, node_args).fetchall()
+            node_ids = {n["id"] for n in nodes}
+            edge_sql = ("SELECT r.source_id, r.target_id, r.relation,"
+                        " s.concept AS source_concept, t.concept AS target_concept"
+                        " FROM knowledge_relations r"
+                        " JOIN knowledge_items s ON s.id=r.source_id AND s.deleted_at IS NULL"
+                        " JOIN knowledge_items t ON t.id=r.target_id AND t.deleted_at IS NULL"
+                        " WHERE r.deleted_at IS NULL AND r.source_id IN (SELECT id FROM knowledge_items WHERE deleted_at IS NULL")
+            edge_args = []
+            if workspace_id:
+                edge_sql += " AND workspace_id=?"
+                edge_args.append(workspace_id)
+            if library:
+                edge_sql += " AND library=?"
+                edge_args.append(library)
+            edge_sql += ") AND r.target_id IN (SELECT id FROM knowledge_items WHERE deleted_at IS NULL"
+            if workspace_id:
+                edge_sql += " AND workspace_id=?"
+                edge_args.append(workspace_id)
+            if library:
+                edge_sql += " AND library=?"
+                edge_args.append(library)
+            edge_sql += ") ORDER BY r.id"
+            edges = conn.execute(edge_sql, edge_args).fetchall()
         return {
             "nodes": [dict(n) for n in nodes],
             "edges": [

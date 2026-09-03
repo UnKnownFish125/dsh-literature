@@ -313,6 +313,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "graph":
                 return self._v2_call(lambda: self._send(200, {"graph": store.graph(
                     workspace_id=qs.get("workspace_id", [""])[0],
+                    library=qs.get("library", [None])[0] or None,
                 )}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "export"] and parts[3] == "bibtex":
                 ids = [int(i) for i in qs.get("ids", [""])[0].split(",") if i]
@@ -420,7 +421,8 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("q") or ""), workspace_id=str(body.get("workspace_id") or ""))}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "graph":
                 return self._v2_call(lambda: self._send(200, {"graph": store.graph(
-                    workspace_id=str(body.get("workspace_id") or ""))}))
+                    workspace_id=str(body.get("workspace_id") or ""),
+                    library=body.get("library") or None)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "dedupe":
                 return self._v2_call(lambda: self._send(200, store.dedupe_check(body.get("candidates") or [])))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "import"]:

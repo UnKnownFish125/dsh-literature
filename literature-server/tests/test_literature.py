@@ -120,52 +120,52 @@ class LiteratumHttpTest(unittest.TestCase):
             return exc.code, json.loads(exc.read())
 
     def test_auth_and_origin(self):
-        self.assertEqual(401, self.req("POST", "/v1/literatum/documents", {"title": "x"}, token=None)[0])
-        self.assertEqual(401, self.req("POST", "/v1/literatum/documents", {"title": "x"}, token="bad")[0])
-        self.assertEqual(403, self.req("POST", "/v1/literatum/documents", {"title": "x"}, origin="http://evil")[0])
+        self.assertEqual(401, self.req("POST", "/v1/literature/documents", {"title": "x"}, token=None)[0])
+        self.assertEqual(401, self.req("POST", "/v1/literature/documents", {"title": "x"}, token="bad")[0])
+        self.assertEqual(403, self.req("POST", "/v1/literature/documents", {"title": "x"}, origin="http://evil")[0])
 
     def test_full_acceptance_flow(self):
-        s, r = self.req("POST", "/v1/literatum/documents",
+        s, r = self.req("POST", "/v1/literature/documents",
                         {"title": "认知负荷理论", "authors": ["Sweller"], "doi": "10.1/123", "workspace_id": "w1"})
         self.assertEqual(200, s)
         d1 = r["document"]["id"]
-        s, r = self.req("POST", "/v1/literatum/documents", {"title": "工作记忆", "workspace_id": "w1"})
+        s, r = self.req("POST", "/v1/literature/documents", {"title": "工作记忆", "workspace_id": "w1"})
         d2 = r["document"]["id"]
-        s, r = self.req("GET", "/v1/literatum/documents?q=" + urllib.parse.quote("认知") + "&workspace_id=w1")
+        s, r = self.req("GET", "/v1/literature/documents?q=" + urllib.parse.quote("认知") + "&workspace_id=w1")
         self.assertEqual(200, s)
         self.assertEqual(1, len(r["documents"]))
-        s, r = self.req("PATCH", f"/v1/literatum/documents/{d1}", {"read_status": "reading"})
+        s, r = self.req("PATCH", f"/v1/literature/documents/{d1}", {"read_status": "reading"})
         self.assertEqual("reading", r["document"]["read_status"])
         # evidence + claims
-        s, r = self.req("POST", "/v1/literatum/evidence",
+        s, r = self.req("POST", "/v1/literature/evidence",
                         {"claim": "容量有限", "stance": "supporting", "doc_id": d2, "workspace_id": "w1"})
         e1 = r["evidence"]["id"]
-        s, r = self.req("POST", "/v1/literatum/evidence",
+        s, r = self.req("POST", "/v1/literature/evidence",
                         {"claim": "容量有限", "stance": "contradicting", "doc_id": d2, "workspace_id": "w1"})
-        s, r = self.req("POST", "/v1/literatum/claims", {"q": "容量有限", "workspace_id": "w1"})
+        s, r = self.req("POST", "/v1/literature/claims", {"q": "容量有限", "workspace_id": "w1"})
         self.assertEqual(1, len(r["claims"]["supporting"]))
         self.assertEqual(1, len(r["claims"]["contradicting"]))
         # knowledge + graph
-        s, r = self.req("POST", "/v1/literatum/knowledge",
+        s, r = self.req("POST", "/v1/literature/knowledge",
                         {"concept": "认知负荷", "summary": "x", "workspace_id": "w1", "sources": [e1]})
         k1 = r["knowledge"]["id"]
-        s, r = self.req("POST", "/v1/literatum/knowledge", {"concept": "工作记忆", "workspace_id": "w1"})
+        s, r = self.req("POST", "/v1/literature/knowledge", {"concept": "工作记忆", "workspace_id": "w1"})
         k2 = r["knowledge"]["id"]
-        s, r = self.req("PATCH", f"/v1/literatum/knowledge/{k1}",
+        s, r = self.req("PATCH", f"/v1/literature/knowledge/{k1}",
                         {"relations": [{"source": k1, "target": k2, "relation": "影响"}]})
         self.assertEqual(200, s)
-        s, r = self.req("GET", "/v1/literatum/graph?workspace_id=w1")
+        s, r = self.req("GET", "/v1/literature/graph?workspace_id=w1")
         self.assertEqual(2, len(r["graph"]["nodes"]))
         self.assertEqual(1, len(r["graph"]["edges"]))
-        s, r = self.req("GET", "/v1/literatum/graph?workspace_id=w2")
+        s, r = self.req("GET", "/v1/literature/graph?workspace_id=w2")
         self.assertEqual(0, len(r["graph"]["nodes"]))
         # bibtex import + dedupe + export
         lines = [f"@article{{k{i}, title={{论文{i}号}}, year={{202{i%3}}}, doi={{10.9/{i}}}}}" for i in range(5)]
-        s, r = self.req("POST", "/v1/literatum/import/bibtex", {"text": "\n".join(lines), "workspace_id": "w1"})
+        s, r = self.req("POST", "/v1/literature/import/bibtex", {"text": "\n".join(lines), "workspace_id": "w1"})
         self.assertEqual(5, r["imported_count"])
-        s, r = self.req("POST", "/v1/literatum/dedupe", {"candidates": [{"title": "论文0号", "doi": "10.9/0"}]})
+        s, r = self.req("POST", "/v1/literature/dedupe", {"candidates": [{"title": "论文0号", "doi": "10.9/0"}]})
         self.assertEqual(1, r["duplicate_count"])
-        s, r = self.req("GET", "/v1/literatum/export/bibtex?ids=2&workspace_id=w1")
+        s, r = self.req("GET", "/v1/literature/export/bibtex?ids=2&workspace_id=w1")
         self.assertEqual(200, s)
         self.assertIn("@article", r["bibtex"])
 
@@ -188,7 +188,7 @@ class LiteratumHttpTest(unittest.TestCase):
         boundary = "B" + _uuid.uuid4().hex
         body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"paper.pdf\"\r\n"
                 "Content-Type: application/pdf\r\n\r\n").encode() + b"%PDF-1.4" + f"\r\n--{boundary}--\r\n".encode()
-        r = urllib.request.Request(self.base + "/v1/literatum/attachments", data=body, method="POST")
+        r = urllib.request.Request(self.base + "/v1/literature/attachments", data=body, method="POST")
         r.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
         r.add_header("Authorization", f"Bearer {self.token}")
         with urllib.request.urlopen(r, timeout=10) as resp:
@@ -198,10 +198,10 @@ class LiteratumHttpTest(unittest.TestCase):
         sk = open(S.SIGNING_KEY_FILE).read().strip()
         exp = int(time.time()) + 300
         sig = hmac.new(sk.encode(), f"{ap}.{exp}".encode(), hashlib.sha256).hexdigest()
-        self.assertEqual(200, self.raw_status(f"/v1/literatum/attachments/{ap}?t={exp}.{sig}"))
-        self.assertEqual(403, self.raw_status(f"/v1/literatum/attachments/{ap}?t={exp}.bad"))
-        self.assertEqual(403, self.raw_status(f"/v1/literatum/attachments/{ap}?t={int(time.time())-3600}.{sig}"))
-        self.assertIn(self.raw_status("/v1/literatum/attachments/..%2F..%2Fetc%2Fpasswd?t=x"), (403, 404))
+        self.assertEqual(200, self.raw_status(f"/v1/literature/attachments/{ap}?t={exp}.{sig}"))
+        self.assertEqual(403, self.raw_status(f"/v1/literature/attachments/{ap}?t={exp}.bad"))
+        self.assertEqual(403, self.raw_status(f"/v1/literature/attachments/{ap}?t={int(time.time())-3600}.{sig}"))
+        self.assertIn(self.raw_status("/v1/literature/attachments/..%2F..%2Fetc%2Fpasswd?t=x"), (403, 404))
 
 
 if __name__ == "__main__":

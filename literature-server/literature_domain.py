@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS documents (
   deleted_at REAL,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
-  workspace_id TEXT NOT NULL DEFAULT ''
+  workspace_id TEXT NOT NULL DEFAULT '',
+  full_text TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_documents_ws ON documents(workspace_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_documents_doi ON documents(doi) WHERE doi != '';
@@ -111,9 +112,26 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
   deleted_at REAL,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
-  workspace_id TEXT NOT NULL DEFAULT ''
+  workspace_id TEXT NOT NULL DEFAULT '',
+  library TEXT NOT NULL DEFAULT 'runtime',
+  archived INTEGER NOT NULL DEFAULT 0,
+  source_memory_id INTEGER DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_ws ON knowledge_items(workspace_id, deleted_at);
+
+CREATE TRIGGER IF NOT EXISTS knowledge_library_check_insert
+BEFORE INSERT ON knowledge_items BEGIN
+  SELECT CASE WHEN NEW.library NOT IN ('bias','core','eco','project','runtime')
+    THEN RAISE(ABORT, 'invalid library') END;
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_library_check_update
+BEFORE UPDATE ON knowledge_items BEGIN
+  SELECT CASE WHEN NEW.library NOT IN ('bias','core','eco','project','runtime')
+    THEN RAISE(ABORT, 'invalid library') END;
+  SELECT CASE WHEN NEW.archived=1 AND NEW.library='bias'
+    THEN RAISE(ABORT, 'bias library cannot be archived') END;
+END;
 
 CREATE TABLE IF NOT EXISTS knowledge_relations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,8 +240,8 @@ class LiteratumStore:
             cur = conn.execute(
                 "INSERT INTO documents (type, title, authors_json, year, journal, doi, isbn, url,"
                 " attachment_path, attachment_sha256, tags_json, read_status, lifecycle_status,"
-                " created_at, updated_at, workspace_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " created_at, updated_at, workspace_id, full_text)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     type_, title,
                     _json_dumps(payload.get("authors")),
@@ -238,6 +256,7 @@ class LiteratumStore:
                     payload.get("read_status") or "unread",
                     payload.get("lifecycle_status") or "active",
                     now, now, workspace_id,
+                    str(payload.get("full_text") or ""),
                 ),
             )
             doc_id = cur.lastrowid
@@ -455,12 +474,21 @@ class LiteratumStore:
         if not concept:
             raise DomainError("concept is required")
         workspace_id = str(payload.get("workspace_id") or "")
+        library = str(payload.get("library") or "runtime")
+        if library not in ("bias", "core", "eco", "project", "runtime"):
+            raise DomainError(f"invalid library: {library}")
+        archived = int(bool(payload.get("archived")))
+        if archived and library == "bias":
+            raise DomainError("bias library cannot be archived")
         now = _now()
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO knowledge_items (concept, summary, notes, created_at, updated_at, workspace_id)"
-                " VALUES (?,?,?,?,?,?)",
+                "INSERT INTO knowledge_items (concept, summary, notes, library, archived,"
+                " source_memory_id, created_at, updated_at, workspace_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
                 (concept, str(payload.get("summary") or ""), str(payload.get("notes") or ""),
+                 library, archived,
+                 int(payload["source_memory_id"]) if payload.get("source_memory_id") else None,
                  now, now, workspace_id),
             )
             kid = cur.lastrowid
@@ -477,7 +505,136 @@ class LiteratumStore:
                     " VALUES (?,?,?,NULL)",
                     (int(eid), kid, workspace_id),
                 )
+        # 向量化入库（v1.1 第 1 步：knowledge → jina 768 维 → literature 自有 FAISS）
+        try:
+            self._vectorize_knowledge([kid])
+        except Exception:
+            pass  # 向量失败不阻断入库（可后续 rebuild 补）
         return self.get_knowledge_item(kid)
+
+    def _vectorize_knowledge(self, kid_ids):
+        """为指定 knowledge_items 生成向量并写入 literature 知识 FAISS（去重幂等）。"""
+        import literature_vectors as V
+        if not kid_ids:
+            return 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, concept, summary FROM knowledge_items WHERE deleted_at IS NULL"
+                " AND id IN (%s)" % ",".join("?" * len(kid_ids)),
+                kid_ids,
+            ).fetchall()
+        if not rows:
+            return 0
+        texts = [f"{r['concept']} {r['summary']}".strip() for r in rows]
+        vectors = V.embed_texts(texts)
+        return V.add_vectors([r["id"] for r in rows], vectors)
+
+    def rebuild_knowledge_vectors(self):
+        """全量重建知识向量索引（POST /v1/literature/knowledge/rebuild）。"""
+        import literature_vectors as V
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, concept, summary FROM knowledge_items WHERE deleted_at IS NULL"
+            ).fetchall()
+        if not rows:
+            V.rebuild([])
+            return 0
+        texts = [f"{r['concept']} {r['summary']}".strip() for r in rows]
+        ids = [r["id"] for r in rows]
+        batch = 64
+        vectors = []
+        for i in range(0, len(rows), batch):
+            vectors.extend(V.embed_texts(texts[i:i + batch]))
+        V.rebuild(list(zip(ids, texts)))
+        return len(ids)
+
+    def archive_knowledge_library(self, library, workspace_id="", reason=""):
+        """归档整个库（active→archived）。bias 拒归档（触发器+服务端双重守卫）。"""
+        if library == "bias":
+            raise DomainError("bias library cannot be archived")
+        now = _now()
+        with self._connect() as conn:
+            sql = "UPDATE knowledge_items SET archived=1, updated_at=? WHERE deleted_at IS NULL AND archived=0 AND library=?"
+            args = [now, library]
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            cur = conn.execute(sql, args)
+        return cur.rowcount
+
+    def list_knowledge(self, workspace_id="", library=None, archived=False, k=100):
+        """列出 knowledge_items（供 browse/归档枚举）。"""
+        with self._connect() as conn:
+            sql = "SELECT * FROM knowledge_items WHERE deleted_at IS NULL"
+            args = []
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            if library:
+                sql += " AND library=?"
+                args.append(library)
+            if archived:
+                sql += " AND archived=1"
+            else:
+                sql += " AND archived=0"
+            sql += " ORDER BY id DESC LIMIT ?"
+            args.append(min(k, 1000))
+            rows = conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_knowledge(self, workspace_id=""):
+        with self._connect() as conn:
+            sql = "SELECT COUNT(*) AS c FROM knowledge_items WHERE deleted_at IS NULL AND archived=0"
+            args = []
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            row = conn.execute(sql, args).fetchone()
+        return row["c"] if row else 0
+
+    def search_knowledge(self, query, k=10, workspace_id="", library=None):
+        """语义检索 knowledge_items：知识向量 top-k + FTS RRF 融合（v1.1 第 3 步）。"""
+        import literature_vectors as V
+        vec_hits = V.search(query, k=k)
+        fts_ids = []
+        with self._connect() as conn:
+            try:
+                fts_rows = conn.execute(
+                    "SELECT rowid FROM knowledge_fts WHERE knowledge_fts MATCH ? LIMIT ?",
+                    (query, k * 2),
+                ).fetchall()
+                fts_ids = [r["rowid"] for r in fts_rows]
+            except Exception:
+                pass
+        RRF_K = 60
+        scores = {}
+        for rank, (hid, _) in enumerate(vec_hits):
+            scores[hid] = scores.get(hid, 0) + 1.0 / (RRF_K + rank + 1)
+        for rank, fid in enumerate(fts_ids):
+            scores[fid] = scores.get(fid, 0) + 1.0 / (RRF_K + rank + 1)
+        ranked = sorted(scores.items(), key=lambda x: -x[1])[:k]
+        result_ids = [rid for rid, _ in ranked]
+        if not result_ids:
+            return []
+        with self._connect() as conn:
+            placeholders = ",".join("?" * len(result_ids))
+            sql = "SELECT * FROM knowledge_items WHERE deleted_at IS NULL AND id IN (" + placeholders + ")"
+            args = list(result_ids)
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            if library:
+                sql += " AND library=?"
+                args.append(library)
+            rows = conn.execute(sql, args).fetchall()
+        order = {rid: i for i, rid in enumerate(result_ids)}
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["rrf_score"] = scores.get(d["id"], 0)
+            results.append(d)
+        results.sort(key=lambda x: order.get(x["id"], 999))
+        return results
 
     def _add_relation(self, conn, owner_id, rel, workspace_id, now):
         source = rel.get("source")

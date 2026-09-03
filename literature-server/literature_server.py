@@ -250,6 +250,15 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "evidence"]:
                 ev_id = int(parts[3])
                 return self._v2_call(lambda: self._send(200, {"evidence": store.get_evidence(ev_id)}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge-browse":
+                return self._v2_call(lambda: self._send(200, {"items": store.list_knowledge(
+                    workspace_id=qs.get("workspace_id", [""])[0],
+                    library=qs.get("library", [None])[0] or None,
+                    archived=qs.get("archived", ["false"])[0].lower() == "true",
+                    k=int(qs.get("k", ["100"])[0]))}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge-count":
+                return self._v2_call(lambda: self._send(200, {"count": store.count_knowledge(
+                    workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"]:
                 kid = int(parts[3])
                 return self._v2_call(lambda: self._send(200, {"knowledge": store.get_knowledge_item(kid)}))
@@ -292,6 +301,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._v2_call(lambda: self._send(200, {"document": store.create_document(body)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "evidence":
                 return self._v2_call(lambda: self._send(200, {"evidence": store.create_evidence(body)}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "archive-library":
+                lib = str(body.get("library") or "").strip()
+                if lib not in ("bias", "core", "eco", "project", "runtime"):
+                    return self._send(400, {"error": f"invalid library: {lib}"})
+                return self._v2_call(lambda: self._send(200, {
+                    "archived": lib, "count": store.archive_knowledge_library(
+                        lib, workspace_id=str(body.get("workspace_id") or ""),
+                        reason=str(body.get("reason") or ""))}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "kb-search":
+                q = str(body.get("query") or "").strip()
+                if not q:
+                    return self._send(400, {"error": "query is required"})
+                return self._v2_call(lambda: self._send(200, {"results": store.search_knowledge(
+                    q, k=int(body.get("k") or 10),
+                    workspace_id=str(body.get("workspace_id") or ""),
+                    library=body.get("library") or None)}))
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"] and parts[3] == "rebuild":
+                return self._v2_call(lambda: self._send(200, {"rebuilt": store.rebuild_knowledge_vectors()}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge":
                 return self._v2_call(lambda: self._send(200, {"knowledge": store.create_knowledge_item(body)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "claims":

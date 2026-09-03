@@ -1,12 +1,13 @@
-// dsh-literatum agent 工具载体（plan-v3.1 §4.2 冻结）：
-// kb_query / kb_browse / kb_constraints / kb_contracts / kb_graph
-// 经 DSH 同源代理 /lit-api 访问 literatum kb-server（Host 插件附加 Bearer token）。
-// kb_* 工具唯一归属 literatum（M4：deepmemory 插件侧维持 memory_recall/save/briefing，避免双注册）。
-// 挂载：.agent-presets/_literatum-plugin/plugin-v1.js
+// dsh-literature agent 工具载体 + 轨 B 前提注入（v1.1 第 4 步）
+// 工具：kb_query / kb_browse / kb_constraints / kb_contracts / kb_graph
+//        + kb_archive_library(library, reason?) / kb_browse(archived=true)
+// 轨 B：system-prompt/assemble 时从 literature(6260) 拉 bias 知识 → [约束前提] 段；
+//       source_memory_id 与 deepmemory 轨 A 同源行去重（抑制重复注入）。
+// 经 /lit-api 代理：/v1/literature/kb/*（6262 kb-server）、kb-search/knowledge-count（6260）。
 
 import { defineTool } from '/usr/local/node/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js'
 
-export const name = 'dsh-literatum'
+export const name = 'dsh-literature'
 
 const API = '/lit-api/v1/literature'
 
@@ -26,45 +27,64 @@ export function apply(ctx) {
   const outSchema = { type: 'object', additionalProperties: true }
   const textRender = (value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
 
+  // 轨 B：bias 约束前提段注入（从 literature 6260 kb-search library=bias）
+  ctx.on('system-prompt/assemble', async (assembly, context, next) => {
+    if (next) { try { await next(assembly, context) } catch {} }
+    try {
+      const bias = await api('/kb-search', {
+        method: 'POST',
+        body: { query: '约束 必须 禁止 绝对路径', k: 6, workspace_id: 'deepseek-harness', library: 'bias' },
+      }).catch(() => null)
+      const rows = (bias && bias.results) || []
+      if (!rows.length) return
+      const text = rows.map((r) => `- ${r.summary || r.concept || ''}`).join('\n')
+      if (assembly && typeof assembly.push === 'function') {
+        assembly.push({ role: 'system', content: `[约束前提]（来自 literature bias 库，均须遵守）：\n${text}` })
+      }
+    } catch (e) { /* 轨 B 注入失败不影响主流程 */ }
+  })
+
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'kb_query',
-    description: 'Query the deepmemory knowledge base semantically. Returns relevant memories with content/type/library/importance. Pass library to scope to bias/core/eco/project/runtime.',
+    description: 'Query knowledge hybrid: literature knowledge vectors + deepmemory memories (RRF fused). mode: hybrid|knowledge-only|deepmemory-only|auto.',
     parameters: {
       query: { type: 'string', required: true, description: 'Concise search keywords.' },
       library: { type: 'string', description: 'bias | core | eco | project | runtime. Empty = all.' },
       k: { type: 'integer', description: 'Max results.', default: 5 },
-      workspace_id: { type: 'string', description: 'Workspace id.', default: '' },
+      workspace_id: { type: 'string', description: 'Workspace id.', default: 'deepseek-harness' },
+      mode: { type: 'string', description: 'hybrid|knowledge-only|deepmemory-only|auto', default: 'auto' },
     },
     output: { schema: outSchema, render: textRender },
     async execute(args) {
-      const body = { query: String(args.query || ''), k: args.k || 5 }
+      const body = { query: String(args.query || ''), k: args.k || 5, mode: args.mode || 'auto' }
       if (args.library) body.library = args.library
       if (args.workspace_id) body.workspace_id = args.workspace_id
       const data = await api('/kb/query', { method: 'POST', body })
-      return { ok: true, count: data.count, results: data.results }
+      return { ok: true, count: data.count, mode: data.mode, knowledge_count: data.knowledge_count, results: data.results }
     },
   })))
 
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'kb_browse',
-    description: 'Browse the knowledge base library catalog: per-library counts and status. Use before querying to decide which library (bias/core/eco/project/runtime) has content.',
+    description: 'Browse library catalog. archived=true to include archived libraries.',
     parameters: {
       library: { type: 'string', description: 'Optional single library.', default: '' },
+      archived: { type: 'boolean', description: 'Include archived.', default: false },
     },
     output: { schema: outSchema, render: textRender },
     async execute(args) {
-      const q = args.library ? `?library=${encodeURIComponent(args.library)}` : ''
-      const data = await api(`/kb/browse${q}`)
+      const q = []
+      if (args.library) q.push(`library=${encodeURIComponent(args.library)}`)
+      if (args.archived) q.push('archived=true')
+      const data = await api(`/kb/browse${q.length ? '?' + q.join('&') : ''}`)
       return { ok: true, libraries: data.libraries }
     },
   })))
 
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'kb_constraints',
-    description: 'Fetch total behavior constraints (bias library): hard rules like test-machine-first, never touch production, absolute-path discipline. Call before acting on the system.',
-    parameters: {
-      k: { type: 'integer', description: 'Max constraints.', default: 12 },
-    },
+    description: 'Fetch total behavior constraints (bias library).',
+    parameters: { k: { type: 'integer', description: 'Max constraints.', default: 12 } },
     output: { schema: outSchema, render: textRender },
     async execute(args) {
       const data = await api(`/kb/constraints?k=${args.k || 12}`)
@@ -74,9 +94,9 @@ export function apply(ctx) {
 
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'kb_contracts',
-    description: 'Query deepmemory core design/contract knowledge: interface contracts, architecture decisions, plans (for derived-plugin development reference).',
+    description: 'Query core design/contract knowledge.',
     parameters: {
-      topic: { type: 'string', description: 'Optional topic filter (e.g. 分库, 注入).', default: '' },
+      topic: { type: 'string', description: 'Optional topic.', default: '' },
       k: { type: 'integer', description: 'Max results.', default: 10 },
     },
     output: { schema: outSchema, render: textRender },
@@ -88,8 +108,23 @@ export function apply(ctx) {
   })))
 
   ctx.effect(() => ctx.tools.register(defineTool({
+    name: 'kb_archive_library',
+    description: 'Archive a whole library (move active items to archived). bias cannot be archived (server-side guard).',
+    parameters: {
+      library: { type: 'string', required: true, description: 'core | eco | project | runtime (bias rejected).' },
+      reason: { type: 'string', description: 'Archive reason.', default: '' },
+    },
+    output: { schema: outSchema, render: textRender },
+    async execute(args) {
+      const body = { library: args.library, reason: args.reason || '' }
+      const data = await api('/kb/archive-library', { method: 'POST', body })
+      return { ok: true, archived: data.archived, count: data.count }
+    },
+  })))
+
+  ctx.effect(() => ctx.tools.register(defineTool({
     name: 'kb_graph',
-    description: 'Fetch the knowledge graph (entities and relations) from deepmemory.',
+    description: 'Fetch the knowledge graph.',
     parameters: {},
     output: { schema: outSchema, render: textRender },
     async execute() {

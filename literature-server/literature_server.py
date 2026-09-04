@@ -189,6 +189,16 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length))
 
+    def _attachment_url(self, doc_id):
+        """为文档附件生成带签名的下载 URL（TTL 300s）。无附件返回 {"url": ""}。"""
+        doc = get_store().get_document(doc_id)
+        if not doc or not doc.get("attachment_path"):
+            return {"url": ""}
+        import time as _t
+        expires = int(_t.time()) + ATTACHMENT_TTL_SECONDS
+        sig = _sign_attachment(doc["attachment_path"], expires)
+        return {"url": f"/lit-api/v1/literature/attachments/{doc['attachment_path']}?t={expires}.{sig}"}
+
     def _v2_call(self, fn):
         try:
             return fn()
@@ -284,6 +294,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"schema": CONFIG_SCHEMA})
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "config":
                 return self._v2_call(lambda: self._send(200, {"config": store.get_settings()}))
+            if len(parts) == 5 and parts[:3] == ["v1", "literature", "documents"] and parts[4] == "attachment-url":
+                doc_id = int(parts[3])
+                return self._v2_call(lambda: self._send(200, self._attachment_url(doc_id)))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "documents"]:
                 doc_id = int(parts[3])
                 return self._v2_call(lambda: self._send(200, {"document": store.get_document(doc_id, include_evidence=True)}))

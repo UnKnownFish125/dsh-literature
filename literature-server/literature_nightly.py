@@ -171,6 +171,67 @@ def process_evidence_to_knowledge(store, ev):
         return {"evidence_id": ev["id"], "error": str(exc)}
 
 
+def process_archive_to_knowledge(store, archive_row):
+    """单条 deepmemory 原料归档 → LLM 提炼知识。status=raw→processed。"""
+    memory_id = archive_row["memory_id"]
+    summary = archive_row["summary"] or ""
+    sources = archive_row["sources_json"] or "[]"
+    try:
+        sources = json.loads(sources)
+    except Exception:
+        sources = []
+    src_text = "\n".join(str(s.get("content") or "") for s in sources[:5])
+    workspace_id = archive_row["workspace_id"] or ""
+    res = llm_chat(
+        "从以下记忆原料提炼一条知识。要求：concept(概念名,简洁)、summary(一句话结论,单一性=只讲一件事)、"
+        "不重复原文。返回 JSON。\n记忆摘要：" + summary + "\n原始对话摘录：" + (src_text[:1500] or "无"),
+        system="你是知识提炼器：只输出 JSON {\"concept\":\"\",\"summary\":\"\"}，不要解释。",
+    )
+    if res.get("error"):
+        return {"memory_id": memory_id, "error": res["error"], "staged": False}
+    obj = extract_json(res.get("content", ""))
+    if not isinstance(obj, dict):
+        return {"memory_id": memory_id, "skipped": "bad json", "staged": False}
+    concept = str(obj.get("concept") or "").strip()
+    summary_k = str(obj.get("summary") or "").strip()
+    if not concept or not summary_k:
+        return {"memory_id": memory_id, "skipped": "empty fields", "staged": False}
+    try:
+        kn = store.create_knowledge_item({
+            "concept": concept, "summary": summary_k,
+            "workspace_id": workspace_id,
+            "library": archive_row.get("library") or "runtime",
+            "source_memory_id": memory_id,  # 溯源链：knowledge → memory_archive(memory_id)
+        })
+        # 标记归档已加工
+        with store._connect() as conn:
+            conn.execute("UPDATE memory_archive SET status='processed' WHERE memory_id=?", (int(memory_id),))
+        return {"memory_id": memory_id, "knowledge_id": kn["id"], "staged": True}
+    except DomainError as exc:
+        return {"memory_id": memory_id, "error": str(exc), "staged": False}
+
+
+def process_archive_batch(store, workspace_id="", limit=50):
+    """raw 归档 → processed（提炼 knowledge）。返回统计。"""
+    with store._connect() as conn:
+        sql = "SELECT * FROM memory_archive WHERE status='raw'"
+        args = []
+        if workspace_id:
+            sql += " AND workspace_id=?"
+            args.append(workspace_id)
+        sql += " ORDER BY id LIMIT ?"
+        args.append(limit)
+        rows = conn.execute(sql, args).fetchall()
+    n = 0
+    for row in rows:
+        r = process_archive_to_knowledge(store, dict(row))
+        if r.get("staged"):
+            n += 1
+        elif r.get("error"):
+            print("  archive#%s: %s" % (r.get("memory_id"), r.get("error")), file=sys.stderr)
+    return n
+
+
 def run_once(store=None, doc_limit=20, dry_run=False):
     """一次夜间加工：全部文献 → 证据 → 知识。返回统计。"""
     store = store or LiteratumStore(DB_PATH)
@@ -200,6 +261,10 @@ def run_once(store=None, doc_limit=20, dry_run=False):
         r = process_evidence_to_knowledge(store, dict(ev))
         if r.get("knowledge_id"):
             out["knowledge_added"] += 1
+    # 归档层加工：memory_archive raw → knowledge（v0.3 专属对接主通道）
+    arch_added = process_archive_batch(store, workspace_id="deepseek-harness", limit=doc_limit)
+    out["archive_processed"] = arch_added
+    out["knowledge_added"] += arch_added
     return out
 
 

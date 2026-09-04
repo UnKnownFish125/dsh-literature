@@ -153,6 +153,24 @@ CREATE TABLE IF NOT EXISTS evidence_source (
 );
 CREATE INDEX IF NOT EXISTS idx_esrc_ws ON evidence_source(workspace_id, deleted_at);
 
+CREATE TABLE IF NOT EXISTS memory_archive (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  memory_id INTEGER UNIQUE,          -- deepmemory documents.id（溯源锚点）
+  summary TEXT NOT NULL DEFAULT '',  -- 记忆摘要（deepmemory content）
+  library TEXT NOT NULL DEFAULT 'runtime',
+  scope TEXT NOT NULL DEFAULT '',
+  memory_type TEXT NOT NULL DEFAULT '',
+  importance REAL NOT NULL DEFAULT 0,
+  workspace_id TEXT NOT NULL DEFAULT '',
+  source_count INTEGER NOT NULL DEFAULT 0,
+  sources_json TEXT NOT NULL DEFAULT '[]',  -- 原始对话（脱敏版，export-archive deliver）
+  created_at REAL NOT NULL,          -- deepmemory created_at
+  ingested_at REAL NOT NULL,         -- 本库 ingest 时间
+  status TEXT NOT NULL DEFAULT 'raw' CHECK(status IN ('raw','staged','processed'))
+);
+CREATE INDEX IF NOT EXISTS idx_memarch_ws ON memory_archive(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_memarch_status ON memory_archive(status);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT '',
@@ -591,6 +609,64 @@ class LiteratumStore:
                 args.append(workspace_id)
             row = conn.execute(sql, args).fetchone()
         return row["c"] if row else 0
+
+    def ingest_memory_archive(self, memories):
+        """deepmemory export-archive 结果 → memory_archive 原料归档层（幂等：按 memory_id 去重）。"""
+        if not memories:
+            return 0
+        now = _now()
+        added = 0
+        with self._connect() as conn:
+            for m in memories:
+                mid = m.get("id")
+                if mid is None:
+                    continue
+                exists = conn.execute(
+                    "SELECT id FROM memory_archive WHERE memory_id=?", (int(mid),)).fetchone()
+                if exists:
+                    continue
+                tags = m.get("tags") or {}
+                sources = m.get("sources") or []
+                conn.execute(
+                    "INSERT INTO memory_archive (memory_id, summary, library, scope, memory_type,"
+                    " importance, workspace_id, source_count, sources_json, created_at, ingested_at, status)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (int(mid), str(m.get("summary") or ""), str(tags.get("library") or "runtime"),
+                     str(tags.get("scope") or ""), str(tags.get("type") or ""),
+                     float(tags.get("importance") or 0), str(m.get("workspace_id") or ""),
+                     len(sources), _json_dumps(sources), float(m.get("created_at") or now),
+                     now, "raw"),
+                )
+                added += 1
+        return added
+
+    def count_memory_archive(self, workspace_id="", status=None):
+        with self._connect() as conn:
+            sql = "SELECT COUNT(*) AS c FROM memory_archive WHERE 1=1"
+            args = []
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            if status:
+                sql += " AND status=?"
+                args.append(status)
+            row = conn.execute(sql, args).fetchone()
+        return row["c"] if row else 0
+
+    def list_memory_archive(self, workspace_id="", status=None, k=200):
+        with self._connect() as conn:
+            sql = "SELECT * FROM memory_archive WHERE 1=1"
+            args = []
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            if status:
+                sql += " AND status=?"
+                args.append(status)
+            sql += " ORDER BY created_at DESC LIMIT ?"
+            args.append(min(k, 1000))
+            rows = conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
 
     def search_knowledge(self, query, k=10, workspace_id="", library=None):
         """语义检索 knowledge_items：知识向量 top-k + FTS RRF 融合（v1.1 第 3 步）。"""

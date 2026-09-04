@@ -309,6 +309,15 @@ class Handler(BaseHTTPRequestHandler):
                     library=qs.get("library", [None])[0] or None,
                     archived=qs.get("archived", ["false"])[0].lower() == "true",
                     k=int(qs.get("k", ["100"])[0]))}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "archive-count":
+                return self._v2_call(lambda: self._send(200, {"count": store.count_memory_archive(
+                    workspace_id=qs.get("workspace_id", [""])[0],
+                    status=qs.get("status", [None])[0] or None)}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "archive-memories":
+                return self._v2_call(lambda: self._send(200, {"items": store.list_memory_archive(
+                    workspace_id=qs.get("workspace_id", [""])[0],
+                    status=qs.get("status", [None])[0] or None,
+                    k=int(qs.get("k", ["200"])[0]))}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge-count":
                 return self._v2_call(lambda: self._send(200, {"count": store.count_knowledge(
                     workspace_id=qs.get("workspace_id", [""])[0])}))
@@ -409,6 +418,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._v2_call(lambda: self._send(200, {"document": store.create_document(body)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "evidence":
                 return self._v2_call(lambda: self._send(200, {"evidence": store.create_evidence(body)}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "archive-ingest":
+                mems = body.get("memories") or []
+                return self._v2_call(lambda: self._send(200, {"ingested": store.ingest_memory_archive(mems)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "archive-library":
                 lib = str(body.get("library") or "").strip()
                 if lib not in ("bias", "core", "eco", "project", "runtime"):

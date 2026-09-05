@@ -586,13 +586,22 @@ class LiteratumStore:
                          (_now(), int(cid)))
         return {"deleted": cid}
 
-    def subtree_of_category(self, cid):
-        """回收CTE取某类别整棵子树（含自身）。"""
+    def subtree_of_category(self, cid, workspace_id=""):
+        """回收CTE取某类别整棵子树（含自身）。workspace 隔离：需传 workspace_id，锚点必须属于该区。"""
+        if not str(workspace_id or "").strip():
+            raise DomainError("workspace_id is required (default-isolation)")
         with self._connect() as conn:
+            root = conn.execute("SELECT workspace_id, node_depth FROM categories WHERE id=? AND deleted_at IS NULL",
+                                (int(cid),)).fetchone()
+            if not root:
+                raise NotFoundError(f"category not found: {cid}")
+            # 锚点必须属于请求区；跨区访问需 ACL（一期默认隔离，跨区尚未授权）
+            if root["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace category access not authorized")
             cat_ids = conn.execute(
-                "WITH RECURSIVE t AS (SELECT id FROM categories WHERE id=? UNION ALL"
-                " SELECT c.id FROM categories c JOIN t ON c.parent_id=t.id)"
-                " SELECT id FROM t", (int(cid),)).fetchall()
+                "WITH RECURSIVE t AS (SELECT id FROM categories WHERE id=? AND workspace_id=? UNION ALL"
+                " SELECT c.id FROM categories c JOIN t ON c.parent_id=t.id AND c.workspace_id=?)"
+                " SELECT id FROM t", (int(cid), workspace_id, workspace_id)).fetchall()
             ids = [r["id"] for r in cat_ids]
             if not ids:
                 return {"categories": [], "knowledge": []}
@@ -601,13 +610,21 @@ class LiteratumStore:
             know = conn.execute(f"SELECT * FROM knowledge_items WHERE category_id IN ({ph}) AND deleted_at IS NULL ORDER BY node_depth,node_order", ids).fetchall()
         return {"categories": [dict(r) for r in cats], "knowledge": [dict(r) for r in know]}
 
-    def subtree_of_knowledge(self, kid):
-        """回收CTE取某知识节点整棵子知识树（含自身）。"""
+    def subtree_of_knowledge(self, kid, workspace_id=""):
+        """回收CTE取某知识节点整棵子知识树（含自身）。workspace 隔离：需传 workspace_id，锚点必须属于该区。"""
+        if not str(workspace_id or "").strip():
+            raise DomainError("workspace_id is required (default-isolation)")
         with self._connect() as conn:
+            root = conn.execute("SELECT workspace_id, node_depth FROM knowledge_items WHERE id=? AND deleted_at IS NULL",
+                                (int(kid),)).fetchone()
+            if not root:
+                raise NotFoundError(f"knowledge not found: {kid}")
+            if root["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace knowledge access not authorized")
             ids = conn.execute(
-                "WITH RECURSIVE t AS (SELECT id FROM knowledge_items WHERE id=? UNION ALL"
-                " SELECT k.id FROM knowledge_items k JOIN t ON k.parent_id=t.id)"
-                " SELECT id FROM t", (int(kid),)).fetchall()
+                "WITH RECURSIVE t AS (SELECT id FROM knowledge_items WHERE id=? AND workspace_id=? UNION ALL"
+                " SELECT k.id FROM knowledge_items k JOIN t ON k.parent_id=t.id AND k.workspace_id=?)"
+                " SELECT id FROM t", (int(kid), workspace_id, workspace_id)).fetchall()
             kid_ids = [r["id"] for r in ids]
             if not kid_ids:
                 return []
@@ -714,17 +731,19 @@ class LiteratumStore:
         return len(ids)
 
     def archive_knowledge_library(self, library, workspace_id="", reason=""):
-        """归档整个库（active→archived）。bias 拒归档（触发器+服务端双重守卫）。"""
+        """归档整个库（active→archived）。bias 拒归档（触发器+服务端双重守卫）。
+        workspace 隔离：空 workspace 代表全库会导致跨工作区批量归档，故要求显式 workspace_id。
+        跨区归档需授权（ACL 后续），此处默认拒绝空（默认隔离兜底）。"""
         if library == "bias":
             raise DomainError("bias library cannot be archived")
+        if not str(workspace_id or "").strip():
+            raise DomainError("workspace_id is required to archive a library (default-isolation)")
         now = _now()
         with self._connect() as conn:
-            sql = "UPDATE knowledge_items SET archived=1, updated_at=? WHERE deleted_at IS NULL AND archived=0 AND library=?"
-            args = [now, library]
-            if workspace_id:
-                sql += " AND workspace_id=?"
-                args.append(workspace_id)
-            cur = conn.execute(sql, args)
+            cur = conn.execute(
+                "UPDATE knowledge_items SET archived=1, updated_at=? WHERE deleted_at IS NULL"
+                " AND archived=0 AND library=? AND workspace_id=?",
+                (now, library, workspace_id))
         return cur.rowcount
 
     def list_knowledge(self, workspace_id="", library=None, archived=False, k=100):
@@ -817,12 +836,16 @@ class LiteratumStore:
 
     def kb_bias_constraints(self, workspace_id="", k=50):
         """轨 B：bias 知识约束（含 source_memory_id——N4 去重用）；
-        返回（知识项列表, 已知识化的记忆 id 集合）。"""
+        返回（知识项列表, 已知识化的记忆 id 集合）。
+        隔离：默认取本 workspace 的 bias；空 workspace 视为未授权，不返回全库 bias。
+        （bias 为全局约束，跨区共享的受控来源由 ACL/全局 scope 在二期细化；一期先默认本区。）"""
+        if not str(workspace_id or "").strip():
+            return [], set()
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, concept, summary, source_memory_id, workspace_id, updated_at"
-                " FROM knowledge_items WHERE library='bias' AND deleted_at IS NULL"
-                " ORDER BY id ASC LIMIT ?", (k,)).fetchall()
+                " FROM knowledge_items WHERE library='bias' AND workspace_id=? AND deleted_at IS NULL"
+                " ORDER BY id ASC LIMIT ?", (workspace_id, k)).fetchall()
         items = []
         mem_ids = set()
         for r in rows:

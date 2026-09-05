@@ -16,7 +16,7 @@ import urllib.parse
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, SERVER_DIR)
 import literature_server as S  # noqa: E402
-from literature_domain import DomainError, LiteratumStore, NotFoundError, install_schema  # noqa: E402
+from literature_domain import DomainError, LiteratumStore, NotFoundError, PermissionDenied, install_schema  # noqa: E402
 
 
 class LiteratumDomainTest(unittest.TestCase):
@@ -202,6 +202,41 @@ class LiteratumHttpTest(unittest.TestCase):
         self.assertEqual(403, self.raw_status(f"/v1/literature/attachments/{ap}?t={exp}.bad"))
         self.assertEqual(403, self.raw_status(f"/v1/literature/attachments/{ap}?t={int(time.time())-3600}.{sig}"))
         self.assertIn(self.raw_status("/v1/literature/attachments/..%2F..%2Fetc%2Fpasswd?t=x"), (403, 404))
+
+
+class P0WorkspaceIsolationTest(unittest.TestCase):
+    """astra 审核 P0②：默认隔离 + workspace 旁路修复。"""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.tmp.name, "t.db")
+        conn = sqlite3.connect(self.db)
+        install_schema(conn)
+        conn.commit(); conn.close()
+        self.store = LiteratumStore(self.db)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_archive_requires_workspace(self):
+        # 空 workspace 归档应拒绝（默认隔离，防全库归档）
+        self.store.create_knowledge_item({"concept": "k", "workspace_id": "w1"})
+        with self.assertRaises(DomainError):
+            self.store.archive_knowledge_library("core", workspace_id="")
+
+    def test_subtree_cross_workspace_denied(self):
+        # w1 建类+知识，w2 访问其子树应拒（跨区默认隔离）
+        c = self.store.create_category({"name": "n", "workspace_id": "w1"})
+        self.store.create_knowledge_item({"concept": "k", "workspace_id": "w1", "category_id": c["id"]})
+        with self.assertRaises(PermissionDenied):
+            self.store.subtree_of_category(c["id"], workspace_id="w2")
+        with self.assertRaises(DomainError):
+            self.store.subtree_of_category(c["id"], workspace_id="")
+
+    def test_bias_constraints_requires_workspace(self):
+        # 空 workspace 拉 bias 约束应返回空（默认隔离，不泄露全库 bias）
+        self.store.create_knowledge_item({"concept": "约束1", "workspace_id": "w1", "library": "bias"})
+        kn, mem = self.store.kb_bias_constraints(workspace_id="")
+        self.assertEqual((kn, mem), ([], set()))
 
 
 if __name__ == "__main__":

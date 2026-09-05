@@ -242,12 +242,12 @@ class Handler(BaseHTTPRequestHandler):
             return fn()
         except NotFoundError as exc:
             return self._send(404, {"error": str(exc)})
-        except (DomainError, ValueError, OverflowError) as exc:
-            return self._send(400, {"error": str(exc)})
         except PermissionDenied as exc:
             return self._send(403, {"error": str(exc)})
         except ConflictError as exc:
             return self._send(409, {"error": str(exc)})
+        except (DomainError, ValueError, OverflowError) as exc:
+            return self._send(400, {"error": str(exc)})
 
     def _handle_error(self, exc):
         msg = str(exc)
@@ -345,13 +345,15 @@ class Handler(BaseHTTPRequestHandler):
                     status=qs.get("status", [None])[0] or None,
                     k=int(qs.get("k", ["200"])[0]))}))
             if len(parts) == 5 and parts[:3] == ["v1", "literature", "categories"] and parts[4] == "subtree":
-                return self._v2_call(lambda: self._send(200, store.subtree_of_category(int(parts[3]))))
+                return self._v2_call(lambda: self._send(200, store.subtree_of_category(
+                    int(parts[3]), workspace_id=qs.get("workspace_id", [""])[0])))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "categories":
                 return self._v2_call(lambda: self._send(200, {"categories": store.list_categories(
                     workspace_id=qs.get("workspace_id", [""])[0],
                     scope=qs.get("scope", [None])[0] or None)}))
             if len(parts) == 5 and parts[:3] == ["v1", "literature", "knowledge"] and parts[4] == "subtree":
-                return self._v2_call(lambda: self._send(200, {"items": store.subtree_of_knowledge(int(parts[3]))}))
+                return self._v2_call(lambda: self._send(200, {"items": store.subtree_of_knowledge(
+                    int(parts[3]), workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge-count":
                 return self._v2_call(lambda: self._send(200, {"count": store.count_knowledge(
                     workspace_id=qs.get("workspace_id", [""])[0])}))

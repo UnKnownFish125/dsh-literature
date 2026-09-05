@@ -115,9 +115,31 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
   workspace_id TEXT NOT NULL DEFAULT '',
   library TEXT NOT NULL DEFAULT 'runtime',
   archived INTEGER NOT NULL DEFAULT 0,
-  source_memory_id INTEGER DEFAULT NULL
+  source_memory_id INTEGER DEFAULT NULL,
+  parent_id INTEGER REFERENCES knowledge_items(id),
+  node_depth INTEGER NOT NULL DEFAULT 0,
+  node_kind TEXT NOT NULL DEFAULT 'item',
+  category_id INTEGER REFERENCES categories(id),
+  node_order INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_ws ON knowledge_items(workspace_id, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_knowledge_parent ON knowledge_items(parent_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_cat ON knowledge_items(category_id);
+
+CREATE TABLE IF NOT EXISTS categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER REFERENCES categories(id),
+  scope TEXT NOT NULL DEFAULT 'workspace',
+  workspace_id TEXT NOT NULL DEFAULT '',
+  node_depth INTEGER NOT NULL DEFAULT 0,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL,
+  deleted_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_cat_ws ON categories(workspace_id, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);
 
 CREATE TRIGGER IF NOT EXISTS knowledge_library_check_insert
 BEFORE INSERT ON knowledge_items BEGIN
@@ -485,8 +507,115 @@ class LiteratumStore:
             "total": len(results),
         }
 
-    # ------------------------------------------------------------ knowledge
+    # ------------------------------------------------------------ categories (树)
 
+    def create_category(self, payload):
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise DomainError("name is required")
+        workspace_id = str(payload.get("workspace_id") or "")
+        scope = str(payload.get("scope") or "workspace")
+        parent_id = payload.get("parent_id")
+        now = _now()
+        with self._connect() as conn:
+            depth = 0
+            if parent_id:
+                p = conn.execute("SELECT node_depth FROM categories WHERE id=? AND deleted_at IS NULL",
+                                 (int(parent_id),)).fetchone()
+                if not p:
+                    raise DomainError("parent category not found")
+                depth = p["node_depth"] + 1
+            cur = conn.execute(
+                "INSERT INTO categories (name, parent_id, scope, workspace_id, node_depth, order_index,"
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                (name, int(parent_id) if parent_id else None, scope, workspace_id, depth,
+                 int(payload.get("order_index") or 0), now, now))
+        return self.get_category(cur.lastrowid)
+
+    def get_category(self, cid):
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM categories WHERE id=? AND deleted_at IS NULL", (int(cid),)).fetchone()
+        if not row:
+            raise NotFoundError(f"category not found: {cid}")
+        return dict(row)
+
+    def list_categories(self, workspace_id="", scope=None):
+        with self._connect() as conn:
+            sql = "SELECT * FROM categories WHERE deleted_at IS NULL"
+            args = []
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            if scope:
+                sql += " AND scope=?"
+                args.append(scope)
+            sql += " ORDER BY node_depth, order_index, id"
+            rows = conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_category(self, cid, changes):
+        allowed = ("name", "parent_id", "order_index")
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM categories WHERE id=? AND deleted_at IS NULL", (int(cid),)).fetchone()
+            if not row:
+                raise NotFoundError(f"category not found: {cid}")
+            if "parent_id" in changes:
+                pid = changes.get("parent_id")
+                depth = 0 if pid is None else (
+                    conn.execute("SELECT node_depth FROM categories WHERE id=? AND deleted_at IS NULL",
+                                 (int(pid),)).fetchone()["node_depth"] + 1)
+                conn.execute("UPDATE categories SET parent_id=?, node_depth=?, updated_at=? WHERE id=?",
+                             (int(pid) if pid else None, depth, _now(), int(cid)))
+            fields = {k: v for k, v in changes.items() if k in ("name", "order_index")}
+            if fields:
+                sets = [f"{k}=?" for k in fields] + ["updated_at=?"]
+                conn.execute(f"UPDATE categories SET {', '.join(sets)} WHERE id=?",
+                             list(fields.values()) + [_now(), int(cid)])
+        return self.get_category(cid)
+
+    def soft_delete_category(self, cid):
+        with self._connect() as conn:
+            cur = conn.execute("UPDATE categories SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                               (_now(), int(cid)))
+            if not cur.rowcount:
+                raise NotFoundError(f"category not found: {cid}")
+            # 子类别/子知识级联软删
+            conn.execute("UPDATE categories SET deleted_at=? WHERE parent_id=? AND deleted_at IS NULL",
+                         (_now(), int(cid)))
+            conn.execute("UPDATE knowledge_items SET deleted_at=? WHERE category_id=? AND deleted_at IS NULL",
+                         (_now(), int(cid)))
+        return {"deleted": cid}
+
+    def subtree_of_category(self, cid):
+        """回收CTE取某类别整棵子树（含自身）。"""
+        with self._connect() as conn:
+            cat_ids = conn.execute(
+                "WITH RECURSIVE t AS (SELECT id FROM categories WHERE id=? UNION ALL"
+                " SELECT c.id FROM categories c JOIN t ON c.parent_id=t.id)"
+                " SELECT id FROM t", (int(cid),)).fetchall()
+            ids = [r["id"] for r in cat_ids]
+            if not ids:
+                return {"categories": [], "knowledge": []}
+            ph = ",".join("?" * len(ids))
+            cats = conn.execute(f"SELECT * FROM categories WHERE id IN ({ph}) AND deleted_at IS NULL ORDER BY node_depth,order_index", ids).fetchall()
+            know = conn.execute(f"SELECT * FROM knowledge_items WHERE category_id IN ({ph}) AND deleted_at IS NULL ORDER BY node_depth,node_order", ids).fetchall()
+        return {"categories": [dict(r) for r in cats], "knowledge": [dict(r) for r in know]}
+
+    def subtree_of_knowledge(self, kid):
+        """回收CTE取某知识节点整棵子知识树（含自身）。"""
+        with self._connect() as conn:
+            ids = conn.execute(
+                "WITH RECURSIVE t AS (SELECT id FROM knowledge_items WHERE id=? UNION ALL"
+                " SELECT k.id FROM knowledge_items k JOIN t ON k.parent_id=t.id)"
+                " SELECT id FROM t", (int(kid),)).fetchall()
+            kid_ids = [r["id"] for r in ids]
+            if not kid_ids:
+                return []
+            ph = ",".join("?" * len(kid_ids))
+            rows = conn.execute(f"SELECT * FROM knowledge_items WHERE id IN ({ph}) AND deleted_at IS NULL ORDER BY node_depth,node_order", kid_ids).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------ knowledge
     def create_knowledge_item(self, payload):
         concept = str(payload.get("concept") or "").strip()
         if not concept:
@@ -498,15 +627,33 @@ class LiteratumStore:
         archived = int(bool(payload.get("archived")))
         if archived and library == "bias":
             raise DomainError("bias library cannot be archived")
+        parent_id = payload.get("parent_id")
+        node_kind = str(payload.get("node_kind") or "item")
+        if node_kind not in ("item", "root", "theory", "support", "evidence"):
+            node_kind = "item"
+        category_id = payload.get("category_id")
+        node_depth = int(payload.get("node_depth") or 0)
+        node_order = int(payload.get("node_order") or 0)
+        # parent 存在则自动算 depth+1
+        if parent_id:
+            with self._connect() as _c:
+                _p = _c.execute("SELECT node_depth FROM knowledge_items WHERE id=? AND deleted_at IS NULL",
+                                (int(parent_id),)).fetchone()
+            if not _p:
+                raise DomainError("parent knowledge item not found")
+            node_depth = _p["node_depth"] + 1
         now = _now()
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO knowledge_items (concept, summary, notes, library, archived,"
-                " source_memory_id, created_at, updated_at, workspace_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                " source_memory_id, parent_id, node_depth, node_kind, category_id, node_order,"
+                " created_at, updated_at, workspace_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (concept, str(payload.get("summary") or ""), str(payload.get("notes") or ""),
                  library, archived,
                  int(payload["source_memory_id"]) if payload.get("source_memory_id") else None,
+                 int(parent_id) if parent_id else None, node_depth, node_kind,
+                 int(category_id) if category_id else None, node_order,
                  now, now, workspace_id),
             )
             kid = cur.lastrowid
@@ -667,6 +814,27 @@ class LiteratumStore:
             args.append(min(k, 1000))
             rows = conn.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
+
+    def kb_bias_constraints(self, workspace_id="", k=50):
+        """轨 B：bias 知识约束（含 source_memory_id——N4 去重用）；
+        返回（知识项列表, 已知识化的记忆 id 集合）。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, concept, summary, source_memory_id, workspace_id, updated_at"
+                " FROM knowledge_items WHERE library='bias' AND deleted_at IS NULL"
+                " ORDER BY id ASC LIMIT ?", (k,)).fetchall()
+        items = []
+        mem_ids = set()
+        for r in rows:
+            items.append({
+                "id": r["id"], "concept": r["concept"], "summary": r["summary"],
+                "source_memory_id": r["source_memory_id"], "workspace_id": r["workspace_id"],
+                "updated_at": r["updated_at"], "kind": "knowledge",
+            })
+            if r["source_memory_id"] is not None:
+                mem_ids.add(int(r["source_memory_id"]))
+        return items, mem_ids
+
 
     def search_knowledge(self, query, k=10, workspace_id="", library=None):
         """语义检索 knowledge_items：知识向量 top-k + FTS RRF 融合（v1.1 第 3 步）。"""

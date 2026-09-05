@@ -243,14 +243,18 @@ class Handler(BaseHTTPRequestHandler):
                     libs = {library: libs[library]}
                 return self._send(200, {"libraries": libs})
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "constraints":
+                # 轨 B（v0.4）：约束=literature 知识 bias（最新契约）+ 未知识化的 deepmemory bias 记忆
+                # （N4：知识化记忆不再以记忆形态重复——去重）
                 ws = qs.get("workspace_id", [UP.DEFAULT_WORKSPACE])[0]
                 k = int(qs.get("k", ["50"])[0])
+                store = get_store()
+                kn_items, kn_mem_ids = store.kb_bias_constraints(ws, k)
                 st, mems = UP.list_memories(ws)
                 if st != 200:
                     return self._send(503 if st == 503 else st, {"error": "upstream list failed"})
-                bias = [m for m in mems if m.get("library") == "bias"]
+                bias = [m for m in mems if m.get("library") == "bias" and m.get("id") not in kn_mem_ids]
                 bias.sort(key=lambda m: float(m.get("importance") or 0), reverse=True)
-                return self._send(200, {"constraints": bias[:k], "count": len(bias),
+                return self._send(200, {"constraints": kn_items + bias[:k], "count": len(kn_items) + len(bias),
                                         "note": "" if bias else "bias 库为空（需存量归类）"})
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "contracts":
                 topic = qs.get("topic", [""])[0]
@@ -318,10 +322,18 @@ class Handler(BaseHTTPRequestHandler):
                     workspace_id=qs.get("workspace_id", [""])[0],
                     status=qs.get("status", [None])[0] or None,
                     k=int(qs.get("k", ["200"])[0]))}))
+            if len(parts) == 5 and parts[:3] == ["v1", "literature", "categories"] and parts[4] == "subtree":
+                return self._v2_call(lambda: self._send(200, store.subtree_of_category(int(parts[3]))))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "categories":
+                return self._v2_call(lambda: self._send(200, {"categories": store.list_categories(
+                    workspace_id=qs.get("workspace_id", [""])[0],
+                    scope=qs.get("scope", [None])[0] or None)}))
+            if len(parts) == 5 and parts[:3] == ["v1", "literature", "knowledge"] and parts[4] == "subtree":
+                return self._v2_call(lambda: self._send(200, {"items": store.subtree_of_knowledge(int(parts[3]))}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge-count":
                 return self._v2_call(lambda: self._send(200, {"count": store.count_knowledge(
                     workspace_id=qs.get("workspace_id", [""])[0])}))
-            if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"]:
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"] and parts[3].isdigit():
                 kid = int(parts[3])
                 return self._v2_call(lambda: self._send(200, {"knowledge": store.get_knowledge_item(kid)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "documents":
@@ -414,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
                         results = [r for r in results if r.get("source") == "literature"][:k]
                 return self._send(200, {"query": q, "count": len(results), "mode": mode,
                                         "results": results, "knowledge_count": kn_total})
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "categories":
+                return self._v2_call(lambda: self._send(200, {"category": store.create_category(body)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "documents":
                 return self._v2_call(lambda: self._send(200, {"document": store.create_document(body)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "evidence":
@@ -470,6 +484,8 @@ class Handler(BaseHTTPRequestHandler):
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
             store = get_store()
             body = self._read_body()
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "categories"]:
+                return self._v2_call(lambda: self._send(200, {"category": store.update_category(int(parts[3]), body)}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "documents"]:
                 return self._v2_call(lambda: self._send(200, {"document": store.update_document(int(parts[3]), body)}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "evidence"]:
@@ -487,6 +503,8 @@ class Handler(BaseHTTPRequestHandler):
             path = urllib.parse.urlparse(self.path).path
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
             store = get_store()
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "categories"]:
+                return self._v2_call(lambda: self._send(200, store.soft_delete_category(int(parts[3]))))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "documents"]:
                 return self._v2_call(lambda: self._send(200, store.soft_delete_document(int(parts[3]))))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "evidence"]:

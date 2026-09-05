@@ -1280,7 +1280,7 @@ function apply(ctx) {
       { name: 'conversation.view', id: 'literature', order: 60, label: '📚 literature' },
       function (props) { return React.createElement(LiteraturePanel, props) },
     )
-  }, { key: 'literature' })
+  })
 
   // 插件配置卡片：设置 → 插件 → 插件配置页（配置项保留在此，tab 内不放置设置入口）
   slots.inject('settings.plugin.item', function* () {
@@ -1288,7 +1288,7 @@ function apply(ctx) {
       { name: 'settings.plugin.item', id: 'literature', key: 'literature', order: 60, label: 'literature 文献库' },
       function () { return React.createElement(ConfigView, {}) },
     )
-  }, { key: 'literature' })
+  })
 }
 
 return { name, apply }

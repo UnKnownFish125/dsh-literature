@@ -132,6 +132,20 @@ def _read_token(path):
         return ""
 
 
+def _guess_mime(file_name):
+    """按扩展名猜 MIME（附件下载 Content-Type）。"""
+    ext = os.path.splitext(file_name)[1].lower()
+    table = {
+        ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/plain",
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+        ".json": "application/json", ".csv": "text/csv", ".html": "text/html",
+        ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+    return table.get(ext, "application/octet-stream")
+
+
 def _sign_attachment(file_path, expires):
     key = _read_token(SIGNING_KEY_FILE)
     message = f"{file_path}.{expires}".encode("utf-8")
@@ -199,6 +213,30 @@ class Handler(BaseHTTPRequestHandler):
         sig = _sign_attachment(doc["attachment_path"], expires)
         return {"url": f"/lit-api/v1/literature/attachments/{doc['attachment_path']}?t={expires}.{sig}"}
 
+    def _serve_attachment(self, file_name, token):
+        """附件下载：仅凭签名 token（TTL 300s），不经 Bearer——供 window.open 用。
+        含路径防逃逸 + MIME 猜测。"""
+        if not _verify_attachment(file_name, token):
+            return self._send(403, {"error": "invalid or expired attachment token"})
+        file_path = os.path.join(ATTACHMENT_DIR, file_name)
+        if not os.path.exists(file_path):
+            return self._send(404, {"error": "attachment not found"})
+        real = os.path.realpath(file_path)
+        if not real.startswith(os.path.realpath(ATTACHMENT_DIR) + os.sep):
+            return self._send(403, {"error": "invalid attachment path"})
+        with open(real, "rb") as fh:
+            data = fh.read()
+        self.send_response(200)
+        self.send_header("Content-Type", _guess_mime(file_name))
+        safe = os.path.basename(file_name)
+        for bad in ('"', "\\", "\r", "\n"):
+            safe = safe.replace(bad, "")
+        self.send_header("Content-Disposition", 'inline; filename="' + safe + '"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
     def _v2_call(self, fn):
         try:
             return fn()
@@ -225,12 +263,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            if self._reject_browser_origin():
-                return
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
+            # 附件下载路由：仅凭签名 token（window.open 无法带 Bearer），先于通用鉴权
+            if len(parts) == 4 and parts[:3] == ["v1", "literature", "attachments"]:
+                return self._serve_attachment(parts[3], qs.get("t", [""])[0])
+            if self._reject_browser_origin():
+                return
 
             # ==== kb 查询路由（单服务合并，deepmemory 上游，H2 kb-server 归入 6260）====
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "browse":
@@ -273,25 +314,6 @@ class Handler(BaseHTTPRequestHandler):
                 if st != 200:
                     return self._send(503 if st == 503 else st, data)
                 return self._send(200, {"graph": data})
-
-            # /v1/literature/attachments/<file>?t=<signed>
-            if len(parts) == 4 and parts[:3] == ["v1", "literature", "attachments"]:
-                file_name = parts[3]
-                token = qs.get("t", [""])[0]
-                if not _verify_attachment(file_name, token):
-                    return self._send(403, {"error": "invalid or expired attachment token"})
-                file_path = os.path.join(ATTACHMENT_DIR, file_name)
-                if not os.path.exists(file_path):
-                    return self._send(404, {"error": "attachment not found"})
-                with open(file_path, "rb") as fh:
-                    data = fh.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/pdf")
-                self.send_header("Content-Disposition", f'inline; filename="{file_name}"')
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return True
 
             store = get_store()
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "config-schema":

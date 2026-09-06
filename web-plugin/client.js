@@ -1,56 +1,40 @@
 __ModuleLoader__.load({
   id: 'dsh-literature',
   factory: (require) => {
-/**
- * dsh-literature 浏览器端插件 —— 文献 · 证据 · 知识三合一 UI（conversation 面板 tab）。
- *
- * conversation.view 面板含四个子视图：
- *   1. 📄 文档视窗：文献列表（标题/作者/年份/标签/阅读状态）+ 检索 + 含归档；
- *      点击文献进入详情视窗：元数据 + 附件（上传/直链）+ 关联证据列表（增删）。
- *   2. 🧠 知识视窗：知识点列表（concept/summary/library/archived），可选知识库过滤
- *      （bias/core/eco/project/runtime + 全部）、可切「含归档」；
- *      点知识点进入独立详情：concept/summary/notes/library/source_memory_id/
- *      关联证据（evidence_source 反查 claim）/ 关联 relations。
- *   3. 🕸 知识图谱视窗：SVG 力导向布局渲染知识概念网络（节点按 library 着色，
- *      上方可下拉选择知识库过滤）；拖拽/缩放/平移，点节点看条目并可跳详情。
- *   4. 📊 状况窗口：deepmemory 记忆库目录（/kb/browse）+ 本库知识量（/knowledge-count
- *      + 分库浏览）+ 图谱节点数（/graph）+ 配置摘要（/config）。
- * 全部请求经同源代理 /lit-api/v1/literature → literature server（6260 单服务）。
- */
 const React = require('react')
+const UI = require('@deepseek-ai/dsh-client-ui-primitives')
 const h = React.createElement
-
 const name = 'dsh-literature'
-const inject = ['settings']
-
 const API = '/lit-api/v1/literature'
-// 与 literature server upstream 默认 workspace 对齐；会话上下文带 workspace 时优先用它
 const DEFAULT_WORKSPACE = 'deepseek-harness'
-
-// ── 知识库（library）常量 ─────────────────────────────────────────
 const LIBRARIES = ['bias', 'core', 'eco', 'project', 'runtime']
 const LIB_LABEL = { bias: 'bias 约束', core: 'core 核心', eco: 'eco 生态', project: 'project 项目', runtime: 'runtime 运行' }
 const LIB_COLOR = {
-  bias: '#f59e0b', core: '#60a5fa', eco: '#34d399',
-  project: '#a78bfa', runtime: '#fb7185', unknown: '#9ca3af',
+  bias: 'var(--dsw-alias-state-warn-primary)',
+  core: 'var(--dsw-alias-brand-primary)',
+  eco: 'var(--dsw-alias-state-success-primary)',
+  project: 'var(--dsw-alias-state-business-primary)',
+  runtime: 'var(--dsw-alias-state-error-primary)',
+  unknown: 'var(--dsw-alias-label-secondary)',
 }
 const READ_STATUS = { unread: '未读', reading: '在读', intensive: '精读', read: '已读' }
 const DOC_TYPE = { paper: '论文', book: '书籍', report: '报告', web: '网页' }
 const STANCE = { supporting: '支持', contradicting: '反驳', contextual: '中性' }
-const STANCE_CLASS = { supporting: 'dsh-lit-stance-sup', contradicting: 'dsh-lit-stance-con', contextual: 'dsh-lit-stance-ctx' }
-
-// ── 基础工具 ───────────────────────────────────────────────────────
-function qs(params) {
-  const parts = []
-  Object.keys(params || {}).forEach(function (key) {
-    const v = params[key]
-    if (v === undefined || v === null || v === '') return
-    parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(v)))
-  })
-  return parts.length ? '?' + parts.join('&') : ''
+const ICONS = {
+  back: UI.IconChevronLeftOutline14, refresh: UI.IconRefreshOutline16, search: UI.IconSearchOutline16,
+  close: UI.IconCloseOutline16, add: UI.IconPlusOutline16, open: UI.IconRightUpOutline16,
+  upload: UI.IconDownloadOutline16, zoomIn: UI.IconPlusOutline16, reset: UI.IconRefreshOutline16, save: UI.IconCheckOutline16,
 }
 
-/** JSON 接口调用：非 2xx 抛 Error（附 server error 文案）。raw=true 时直接发 body（如 FormData）。 */
+function qs(params) {
+  const query = new URLSearchParams()
+  Object.keys(params || {}).forEach(function (key) {
+    const value = params[key]
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value))
+  })
+  return query.size ? '?' + query.toString() : ''
+}
+
 async function api(path, opts) {
   const o = opts || {}
   const method = o.method || 'GET'
@@ -75,133 +59,434 @@ async function api(path, opts) {
   return data
 }
 
+// Shared DSH tokens; only native option popups need dark fallbacks.
+const LIT_CSS = `
+/* DSH DESIGN TOKENS: deepmemory box / row / mini / btn / input / select. */
+.dsh-lit-panel, .dsh-lit-pcard { color:var(--dsw-alias-label-primary); font-size:13px; line-height:1.55; letter-spacing:0; min-width:0; }
+.dsh-lit-panel *, .dsh-lit-pcard * { box-sizing:border-box; letter-spacing:0; }
+.dsh-lit-panel { width:100%; max-width:1120px; padding:16px 20px; display:flex; flex-direction:column; gap:12px; container-type:inline-size; }
+.dsh-lit-topbar, .dsh-lit-actions, .dsh-lit-meta, .dsh-lit-section-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+.dsh-lit-topbar { justify-content:space-between; min-height:28px; }
+.dsh-lit-brand { margin:0; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
+.dsh-lit-ws { color:var(--dsw-alias-label-secondary); font-size:11px; max-width:100%; overflow-wrap:anywhere; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+.dsh-lit-tabs { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:4px; padding:0 0 10px; border-bottom:1px solid var(--dsw-alias-border-l1); }
+.dsh-lit-tab { appearance:none; border:1px solid var(--dsw-alias-border-l1); border-radius:6px; padding:5px 8px; min-height:32px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-secondary); font:inherit; cursor:pointer; }
+.dsh-lit-tab:hover, .dsh-lit-btn:hover { background:var(--dsw-alias-bg-layer-2); }
+.dsh-lit-tab[aria-selected="true"] { background:var(--dsw-alias-bg-layer-2); border-color:var(--dsw-alias-border-l2); color:var(--dsw-alias-label-primary); font-weight:600; }
+.dsh-lit-view, .dsh-lit-stack { display:flex; flex-direction:column; gap:12px; min-width:0; }
+.dsh-lit-view[hidden] { display:none; }
+.dsh-lit-title { margin:0; font-size:12px; font-weight:500; color:var(--dsw-alias-label-secondary); }
+.dsh-lit-heading { margin:0; font-size:15px; font-weight:600; overflow-wrap:anywhere; }
+.dsh-lit-section { padding-top:12px; border-top:1px solid var(--dsw-alias-border-l1); min-width:0; }
+.dsh-lit-section-head { margin-bottom:8px; }
+.dsh-lit-box { border:1px solid var(--dsw-alias-border-l1); border-radius:8px; padding:10px; min-width:0; }
+.dsh-lit-row { display:flex; gap:8px; align-items:flex-start; padding:7px 0; border-top:1px solid var(--dsw-alias-border-l1); min-width:0; }
+.dsh-lit-row:first-child { border-top:0; }
+.dsh-lit-list { min-width:0; border-top:1px solid var(--dsw-alias-border-l1); }
+.dsh-lit-rowbtn { appearance:none; display:flex; gap:10px; align-items:flex-start; width:100%; text-align:left; padding:10px 0; border:0; border-bottom:1px solid var(--dsw-alias-border-l1); border-radius:0; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); font:inherit; cursor:pointer; }
+.dsh-lit-rowbtn:hover { background:var(--dsw-alias-bg-layer-2); }
+.dsh-lit-rowbtn .dsh-lit-content { display:flex; flex-direction:column; gap:4px; }
+.dsh-lit-content { flex:1; min-width:0; overflow-wrap:anywhere; }
+.dsh-lit-row-icon { flex:none; width:22px; padding-top:1px; text-align:center; color:var(--dsw-alias-label-secondary); }
+.dsh-lit-badge, .dsh-lit-mini { display:inline-flex; align-items:center; gap:4px; max-width:100%; font-size:11px; font-weight:400; line-height:1.55; padding:1px 5px; border:1px solid var(--dsw-alias-border-l1); border-radius:6px; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-secondary); overflow-wrap:anywhere; }
+.dsh-lit-badge { color:var(--dsw-alias-label-primary); }
+.dsh-lit-archived { border-style:dashed; color:var(--dsw-alias-state-warn-primary); }
+.dsh-lit-stance-supporting { color:var(--dsw-alias-state-success-primary); }
+.dsh-lit-stance-contradicting { color:var(--dsw-alias-state-error-primary); }
+.dsh-lit-stance-contextual { color:var(--dsw-alias-label-secondary); }
+.dsh-lit-meta { gap:6px; color:var(--dsw-alias-label-secondary); font-size:12px; overflow-wrap:anywhere; }
+.dsh-lit-muted, .dsh-lit-count { color:var(--dsw-alias-label-secondary); font-size:11px; overflow-wrap:anywhere; }
+.dsh-lit-count { margin-left:auto; }
+.dsh-lit-input, .dsh-lit-select { min-width:0; max-width:100%; background:var(--dsw-alias-bg-layer-1); border:1px solid var(--dsw-alias-border-l2); border-radius:6px; padding:6px 8px; color:var(--dsw-alias-label-primary); font:inherit; line-height:1.55; }
+.dsh-lit-input { flex:1; width:100%; }
+.dsh-lit-select { padding:5px 6px; }
+.dsh-lit-input::placeholder { color:var(--dsw-alias-label-secondary); opacity:1; }
+.dsh-lit-select option { background:var(--dsw-alias-bg-overlay, #1e1e1e); color:var(--dsw-alias-label-primary, #e8e8e8); }
+.dsh-lit-check { display:inline-flex; gap:6px; align-items:center; color:var(--dsw-alias-label-secondary); cursor:pointer; white-space:nowrap; }
+.dsh-lit-check input { accent-color:var(--dsw-alias-brand-primary); margin:0; width:14px; height:14px; }
+.dsh-lit-btn { appearance:none; display:inline-flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--dsw-alias-border-l2); background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); border-radius:6px; min-height:30px; max-width:100%; padding:4px 12px; cursor:pointer; font:inherit; line-height:1.55; }
+.dsh-lit-btn-primary { border-color:var(--dsw-alias-brand-primary); color:var(--dsw-alias-brand-primary); }
+.dsh-lit-btn-danger { color:var(--dsw-alias-state-error-primary); }
+.dsh-lit-btn-icon { width:32px; height:32px; flex:none; padding:0; }
+.dsh-lit-symbol { display:inline-flex; width:16px; height:18px; align-items:center; justify-content:center; flex:none; font-size:16px; line-height:1; }
+.dsh-lit-symbol-upload { transform:rotate(180deg); }
+.dsh-lit-btn:disabled { opacity:.45; cursor:default; }
+.dsh-lit-panel :focus-visible, .dsh-lit-pcard :focus-visible { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:2px; }
+.dsh-lit-link { color:var(--dsw-alias-brand-primary); text-decoration:none; overflow-wrap:anywhere; }
+.dsh-lit-link:hover { text-decoration:underline; }
+.dsh-lit-search { display:flex; align-items:center; gap:6px; flex:1 1 220px; min-width:0; }
+.dsh-lit-form { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; }
+.dsh-lit-field { display:flex; flex-direction:column; gap:4px; flex:1 1 180px; min-width:0; max-width:100%; color:var(--dsw-alias-label-secondary); font-size:12px; }
+.dsh-lit-field-wide { flex-basis:100%; }
+.dsh-lit-field textarea { min-height:80px; resize:vertical; }
+.dsh-lit-kv { display:grid; grid-template-columns:minmax(80px, .25fr) minmax(0, 1fr); gap:6px 14px; margin:0; }
+.dsh-lit-kv dt { color:var(--dsw-alias-label-secondary); overflow-wrap:anywhere; }
+.dsh-lit-kv dd { margin:0; min-width:0; overflow-wrap:anywhere; }
+.dsh-lit-text { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.dsh-lit-pre { margin:8px 0 0; padding:8px; background:var(--dsw-alias-bg-layer-1); border:1px solid var(--dsw-alias-border-l1); border-radius:6px; color:var(--dsw-alias-label-primary); font:inherit; font-size:12px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; max-height:360px; overflow:auto; }
+.dsh-lit-details > summary { cursor:pointer; color:var(--dsw-alias-label-secondary); }
+.dsh-lit-evidence { display:flex; flex-direction:column; gap:6px; padding:10px 0; border-top:1px solid var(--dsw-alias-border-l1); min-width:0; }
+.dsh-lit-evidence:first-child { border-top:0; }
+.dsh-lit-evidence blockquote { margin:0; padding-left:10px; border-left:2px solid var(--dsw-alias-border-l2); color:var(--dsw-alias-label-secondary); }
+.dsh-lit-relation { display:grid; grid-template-columns:minmax(0, 1fr) auto minmax(0, 1fr); gap:8px; align-items:start; width:100%; }
+.dsh-lit-empty { padding:20px 0; color:var(--dsw-alias-label-secondary); }
+.dsh-lit-notice { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 0; min-width:0; color:var(--dsw-alias-label-secondary); overflow-wrap:anywhere; }
+.dsh-lit-notice-error { color:var(--dsw-alias-state-error-primary); }
+.dsh-lit-notice-ok { color:var(--dsw-alias-state-success-primary); }
+.dsh-lit-stat-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+.dsh-lit-stat { display:flex; flex-direction:column; gap:8px; background:var(--dsw-alias-bg-layer-1); }
+.dsh-lit-stat-big { font-size:24px; font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
+.dsh-lit-stat-lines { display:flex; flex-direction:column; gap:4px; color:var(--dsw-alias-label-secondary); font-size:12px; overflow-wrap:anywhere; }
+.dsh-lit-graphbox { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; min-width:0; }
+.dsh-lit-graphbox-selected { grid-template-columns:minmax(0, 1fr) 220px; }
+.dsh-lit-graph-stage { min-width:0; position:relative; }
+.dsh-lit-graph-svg { width:100%; height:clamp(360px, 62vh, 640px); display:block; overflow:hidden; overscroll-behavior:contain; background:var(--dsw-alias-bg-layer-1); border:1px solid var(--dsw-alias-border-l1); border-radius:8px; touch-action:none; cursor:grab; }
+.dsh-lit-graph-svg:active { cursor:grabbing; }
+.dsh-lit-graph-node { cursor:grab; transition:opacity .14s; }
+.dsh-lit-graph-label { fill:var(--dsw-alias-label-primary); font-size:11px; paint-order:stroke; stroke:var(--dsw-alias-bg-layer-1); stroke-width:3px; stroke-linejoin:round; pointer-events:none; }
+.dsh-lit-graph-edge { stroke:var(--dsw-alias-border-l2); }
+.dsh-lit-graph-legend { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--dsw-alias-label-secondary); }
+.dsh-lit-graph-key { display:inline-flex; align-items:center; gap:5px; }
+.dsh-lit-graph-dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
+.dsh-lit-graph-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:20px; pointer-events:none; color:var(--dsw-alias-label-secondary); text-align:center; }
+.dsh-lit-side { display:flex; flex-direction:column; gap:10px; padding-left:12px; border-left:1px solid var(--dsw-alias-border-l1); min-width:0; }
+.dsh-lit-pcard { border:1px solid var(--dsw-alias-border-l2); background:var(--dsw-alias-bg-layer-1); border-radius:8px; list-style:none; }
+.dsh-lit-pcard[open] { background:var(--dsw-alias-bg-layer-2); }
+.dsh-lit-pcard > summary { cursor:pointer; padding:14px 16px; font-weight:600; }
+.dsh-lit-pcard-body { border-top:1px solid var(--dsw-alias-border-l2); margin:0 16px; padding:12px 0; }
+.dsh-lit-cfg-group { border:0; margin:0 0 12px; padding:0; min-width:0; }
+.dsh-lit-cfg-group legend { color:var(--dsw-alias-label-secondary); font-size:12px; margin-bottom:4px; }
+.dsh-lit-cfg-item { display:flex; flex-direction:column; gap:4px; padding:8px 0; border-top:1px solid var(--dsw-alias-border-l1); min-width:0; }
+.dsh-lit-cfg-item:first-of-type { border-top:0; }
+.dsh-lit-cfg-label { font-weight:500; overflow-wrap:anywhere; }
+.dsh-lit-cfg-footer { display:flex; align-items:center; justify-content:flex-end; gap:8px; border-top:1px solid var(--dsw-alias-border-l2); padding-top:10px; }
+.dsh-lit-cfg-footer .dsh-lit-notice { flex:1; }
+@container (max-width:620px) { .dsh-lit-graphbox-selected { grid-template-columns:minmax(0, 1fr); } .dsh-lit-side { border-left:0; border-top:1px solid var(--dsw-alias-border-l1); padding:12px 0 0; } }
+@container (max-width:420px) { .dsh-lit-stat-grid { grid-template-columns:minmax(0, 1fr); } .dsh-lit-graph-svg { height:380px; } .dsh-lit-relation { grid-template-columns:minmax(0, 1fr); } }
+@media (max-width:480px) { .dsh-lit-panel { padding:12px; } .dsh-lit-tab { padding:5px 2px; } }
+
+`
+
 function fmtTime(ts) {
   if (ts === undefined || ts === null || ts === '') return '—'
-  const d = new Date(Number(ts) * 1000)
-  if (Number.isNaN(d.getTime())) return String(ts)
-  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const date = new Date(Number.isFinite(Number(ts)) ? Number(ts) * 1000 : ts)
+  return Number.isNaN(date.getTime()) ? String(ts) : date.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  })
 }
 
-function short(v, n) {
-  const s = String(v === undefined || v === null ? '' : v)
-  return s.length > n ? s.slice(0, n) + '…' : s
+function short(value, length) {
+  const text = String(value == null ? '' : value)
+  return text.length > length ? text.slice(0, length) + '…' : text
 }
-
-function clipLabel(s, n) {
-  const t = String(s === undefined || s === null ? '' : s).trim()
-  return t.length > n ? t.slice(0, n - 1) + '…' : t
-}
-
-function libraryColor(lib) { return LIB_COLOR[lib] || LIB_COLOR.unknown }
 
 function isArchived(item) { return !!item && (item.archived === 1 || item.archived === true || String(item.archived) === 'true') }
+function libraryColor(library) { return LIB_COLOR[library] || LIB_COLOR.unknown }
+function message(error) { return String(error && error.message || error) }
+function list(value) { return Array.isArray(value) ? value : [] }
+function pathFor(kind, id, workspaceId) { return '/' + kind + '/' + encodeURIComponent(String(id)) + qs({ workspace_id: workspaceId }) }
 
-/** 会话上下文 → workspace_id；取不到则回落服务端默认 workspace。 */
 function resolveWorkspaceId(props) {
   const sid = props && props.sessionId ? String(props.sessionId) : ''
   const workspaces = typeof props.useWorkspaces === 'function'
-    ? props.useWorkspaces(function (s) { return (s && s.items) || [] })
-    : []
-  const current = workspaces.find(function (w) { return ((w.sessionIds || []).indexOf(sid) >= 0) }) || null
-  return current ? String(current.workspaceId) : DEFAULT_WORKSPACE
+    ? props.useWorkspaces(function (state) { return state && state.items || [] }) : []
+  const current = list(workspaces).find(function (workspace) { return list(workspace.sessionIds).indexOf(sid) >= 0 })
+  return current && current.workspaceId ? String(current.workspaceId) : DEFAULT_WORKSPACE
 }
 
-/** 渲染用：库名 → 彩色标签 chips。 */
-function libraryChip(lib, extra) {
-  const key = lib || 'unknown'
-  const col = libraryColor(lib)
-  return h('span', Object.assign({ key: (extra ? extra + '-' : 'lib-') + key, className: 'dsh-lit-tag' },
-    { style: { color: col, borderColor: col + '66', background: col + '1f' } }),
-    (lib && LIB_LABEL[lib]) ? LIB_LABEL[lib] : String(lib || 'unknown'))
+function Button(props) {
+  const attrs = Object.assign({ type: 'button' }, props)
+  delete attrs.icon
+  delete attrs.children
+  attrs.className = 'dsh-lit-btn' + (props.className ? ' ' + props.className : '')
+  if (!props.children) {
+    attrs.className += ' dsh-lit-btn-icon'
+    attrs['aria-label'] = props['aria-label'] || props.title
+  }
+  return h('button', attrs,
+    props.icon ? h('span', { className: 'dsh-lit-symbol' + (props.icon === 'upload' ? ' dsh-lit-symbol-upload' : ''), 'aria-hidden': true },
+      ICONS[props.icon] ? h(ICONS[props.icon], {}) : '−') : null,
+    props.children || null)
 }
 
-function stanceChip(stance, key) {
-  const st = STANCE[stance] ? stance : 'contextual'
-  const label = STANCE[stance] ? STANCE[stance] : String(stance || STANCE.contextual)
-  return h('span', { key: key || ('stance-' + st), className: 'dsh-lit-tag ' + (STANCE_CLASS[st] || STANCE_CLASS.contextual) }, label)
+function Notice(props) {
+  if (!props.text) return null
+  return h('div', { className: 'dsh-lit-notice' + (props.error ? ' dsh-lit-notice-error' : props.success ? ' dsh-lit-notice-ok' : ''), role: props.error ? 'alert' : 'status' },
+    h('span', { className: 'dsh-lit-content' }, props.text),
+    props.retry ? h(Button, { icon: 'refresh', title: '重试', onClick: props.retry }, '重试') : null)
 }
 
-// ── 面板样式（沿用 DSH 主题 CSS 变量，缺省回退同 deepmemory）─────
-const LIT_CSS = `
-.dsh-lit-panel { display:flex; flex-direction:column; gap:10px; padding:14px 16px 24px; font-size:13px; line-height:1.55; color:var(--dsw-alias-label-primary, inherit); min-width:0; }
-.dsh-lit-topbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding-bottom:10px; border-bottom:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.2)); }
-.dsh-lit-brand { font-size:14px; font-weight:600; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
-.dsh-lit-ws { font-size:11px; opacity:.55; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.dsh-lit-tabs { display:inline-flex; gap:2px; margin-left:auto; border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4)); border-radius:8px; padding:2px; flex-wrap:wrap; }
-.dsh-lit-tab { appearance:none; background:transparent; border:0; color:var(--dsw-alias-label-secondary, rgba(128,128,128,.8)); font:inherit; font-size:12px; padding:4px 12px; border-radius:6px; cursor:pointer; white-space:nowrap; }
-.dsh-lit-tab:hover { background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.16)); }
-.dsh-lit-tab-on { background:var(--dsw-alias-bg-layer-3, rgba(128,128,128,.24)); color:var(--dsw-alias-label-primary, inherit); font-weight:600; }
-.dsh-lit-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.dsh-lit-input { flex:1; min-width:120px; background:var(--dsw-alias-bg-layer-1, transparent); border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4)); border-radius:6px; padding:6px 9px; color:var(--dsw-alias-label-primary, inherit); font:inherit; }
-.dsh-lit-input:focus { outline:1px solid var(--dsw-alias-brand-primary, #4c8dff); }
-.dsh-lit-select { background:var(--dsw-alias-bg-layer-1, transparent); border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.4)); border-radius:6px; padding:5px 8px; color:var(--dsw-alias-label-primary, inherit); font:inherit; }
-.dsh-lit-select option { background:var(--dsw-alias-bg-overlay, #1e1e1e); color:var(--dsw-alias-label-primary, #e8e8e8); }
-.dsh-lit-btn { border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,.45)); background:var(--dsw-alias-bg-layer-1, transparent); color:var(--dsw-alias-label-primary, inherit); border-radius:6px; padding:5px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
-.dsh-lit-btn:hover { background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.18)); }
-.dsh-lit-btn-primary { border-color:var(--dsw-alias-brand-primary, #4c8dff); color:var(--dsw-alias-brand-primary, #4c8dff); }
-.dsh-lit-btn-danger { border-color:#d34848; color:#f87171; }
-.dsh-lit-btn-danger:hover { background:rgba(211,72,72,.14); }
-.dsh-lit-btn-mini { padding:2px 8px; font-size:12px; border-radius:5px; }
-.dsh-lit-btn:disabled { opacity:.45; cursor:default; }
-.dsh-lit-link { color:var(--dsw-alias-brand-primary, #4c8dff); cursor:pointer; text-decoration:none; }
-.dsh-lit-link:hover { text-decoration:underline; }
-.dsh-lit-muted { opacity:.55; font-size:11px; }
-.dsh-lit-meta { opacity:.62; font-size:12px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.dsh-lit-count { opacity:.55; font-size:11px; white-space:nowrap; }
-.dsh-lit-card { border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3)); border-radius:10px; padding:10px 12px; background:var(--dsw-alias-bg-layer-1, rgba(128,128,128,.05)); }
-.dsh-lit-sect-h { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; opacity:.7; margin:14px 0 8px; }
-.dsh-lit-list { display:flex; flex-direction:column; gap:8px; }
-.dsh-lit-scroll { max-height:min(44vh, 460px); overflow:auto; display:flex; flex-direction:column; gap:8px; padding:2px 3px 4px 0; scrollbar-width:thin; }
-.dsh-lit-item { display:block; width:100%; text-align:left; padding:9px 12px; border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3)); border-radius:9px; cursor:pointer; background:transparent; color:var(--dsw-alias-label-primary, inherit); font:inherit; transition:border-color .15s, background .15s; }
-.dsh-lit-item:hover { border-color:var(--dsw-alias-label-dimmed, rgba(128,128,128,.6)); background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,.12)); }
-.dsh-lit-item-title { font-weight:600; font-size:13px; display:flex; gap:6px; align-items:flex-start; flex-wrap:wrap; }
-.dsh-lit-item-title .dsh-lit-tt { flex:1; min-width:0; word-break:break-word; }
-.dsh-lit-summary { color:var(--dsw-alias-label-secondary, rgba(128,128,128,.85)); font-size:12px; margin-top:3px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; word-break:break-word; }
-.dsh-lit-tag { display:inline-flex; font-size:11px; line-height:1.7; border-radius:999px; padding:0 9px; border:1px solid rgba(128,128,128,.3); opacity:.95; white-space:nowrap; }
-.dsh-lit-arch-badge { border-style:dashed; border-color:#f59e0b88; color:#fbbf24; background:#f59e0b14; }
-.dsh-lit-empty { opacity:.5; padding:14px 4px; }
-.dsh-lit-err { color:#f87171; font-size:12px; padding:4px 0; }
-.dsh-lit-ok { color:#4ade80; font-size:12px; padding:4px 0; }
-.dsh-lit-kv { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:4px 16px; }
-.dsh-lit-kv > .dsh-lit-k { opacity:.6; white-space:nowrap; }
-.dsh-lit-kv > .dsh-lit-v { min-width:0; word-break:break-word; }
-.dsh-lit-pre { margin:6px 0 0; padding:8px 10px; background:var(--dsw-alias-bg-layer-1, rgba(128,128,128,.08)); border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.2)); border-radius:6px; font-size:12px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
-.dsh-lit-ev { border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.24)); border-radius:9px; padding:8px 10px; display:flex; flex-direction:column; gap:4px; }
-.dsh-lit-ev-head { display:flex; align-items:flex-start; gap:8px; }
-.dsh-lit-ev-claim { flex:1; font-weight:600; font-size:13px; word-break:break-word; }
-.dsh-lit-ev-text { opacity:.8; font-size:12px; line-height:1.5; word-break:break-word; }
-.dsh-lit-ev-foot { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.dsh-lit-stance-sup { color:#34d399; border-color:#34d39966; background:#34d3991a; }
-.dsh-lit-stance-con { color:#f87171; border-color:#f8717166; background:#f871711a; }
-.dsh-lit-stance-ctx { color:#94a3b8; border-color:#94a3b866; background:#94a3b81a; }
-.dsh-lit-field { display:flex; flex-direction:column; gap:3px; }
-.dsh-lit-field label { font-size:11px; opacity:.65; }
-.dsh-lit-form { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; }
-.dsh-lit-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:10px; }
-.dsh-lit-stat { border:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.3)); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; background:var(--dsw-alias-bg-layer-1, rgba(128,128,128,.05)); }
-.dsh-lit-stat .dsh-lit-stat-label { font-size:11px; opacity:.65; letter-spacing:.04em; }
-.dsh-lit-stat .dsh-lit-stat-big { font-size:26px; font-weight:700; line-height:1.15; }
-.dsh-lit-stat .dsh-lit-stat-sub { font-size:11px; opacity:.75; line-height:1.7; }
-.dsh-lit-graphbox { display:flex; gap:12px; align-items:stretch; }
-.dsh-lit-svg-wrap { flex:1; min-width:0; }
-.dsh-lit-svg { width:100%; aspect-ratio:1000 / 620; height:auto; display:block; border-radius:10px; background:var(--dsw-alias-bg-layer-1, rgba(128,128,128,.06)); touch-action:none; cursor:grab; }
-.dsh-lit-svg.dsh-lit-dragging { cursor:grabbing; }
-.dsh-lit-gnode { cursor:pointer; transition:opacity .12s; }
-.dsh-lit-gedge { stroke:var(--dsw-alias-border-l2, rgba(128,128,128,.55)); }
-.dsh-lit-glabel { fill:var(--dsw-alias-label-primary, #e8e8e8); font-size:13px; paint-order:stroke; stroke:var(--dsw-alias-bg-layer-1, #0e1114); stroke-width:4px; stroke-linejoin:round; pointer-events:none; }
-.dsh-lit-legend { display:flex; gap:10px; flex-wrap:wrap; font-size:11px; opacity:.8; align-items:center; margin-top:8px; }
-.dsh-lit-key { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
-.dsh-lit-dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
-.dsh-lit-side { width:250px; flex:none; display:flex; flex-direction:column; gap:8px; }
-.dsh-lit-hint { opacity:.55; font-size:11px; }
-.dsh-lit-hr { border:none; border-top:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,.18)); margin:10px 0 0; }
-.dsh-lit-abs { position:relative; }
-.dsh-lit-loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:8px; background:var(--dsw-alias-bg-layer-1, rgba(0,0,0,.25)); border-radius:10px; font-size:12px; z-index:2; }
-details.dsh-lit-details summary { cursor:pointer; opacity:.8; }
-@media (max-width:760px) { .dsh-lit-side { width:100%; } .dsh-lit-graphbox { flex-direction:column; } }
-`
+function Empty(props) { return h('div', { className: 'dsh-lit-empty', role: 'status' }, props.children || '暂无数据') }
 
-// ── 图谱布局：圆心螺旋初始化 + 斥力/弹簧迭代 + 碰撞消除 ──────────
+function libraryChip(library) {
+  return h('span', { className: 'dsh-lit-mini' },
+    h('i', { className: 'dsh-lit-graph-dot', style: { background: libraryColor(library) }, 'aria-hidden': true }),
+    LIB_LABEL[library] || library || '未分类')
+}
+
+function archivedChip() { return h('span', { className: 'dsh-lit-mini dsh-lit-archived' }, '已归档') }
+
+function LibrarySelect(props) {
+  return h('select', {
+    className: 'dsh-lit-select', value: props.value, 'aria-label': '知识库', title: '知识库',
+    onChange: function (event) { props.onChange(event.target.value) },
+  }, h('option', { value: '' }, '全部知识库'),
+  LIBRARIES.map(function (library) { return h('option', { key: library, value: library }, LIB_LABEL[library]) }))
+}
+
+function ArchiveCheck(props) {
+  return h('label', { className: 'dsh-lit-check' },
+    h('input', { type: 'checkbox', checked: props.value, onChange: function (event) { props.onChange(event.target.checked) } }), '含归档')
+}
+
+function KV(props) {
+  return h('dl', { className: 'dsh-lit-kv' }, props.rows.map(function (row) {
+    return h(React.Fragment, { key: row[0] },
+      h('dt', null, row[0]), h('dd', null, row[1] == null || row[1] === '' ? '—' : row[1]))
+  }))
+}
+
+function Section(props) {
+  return h('section', { className: 'dsh-lit-section' },
+    h('div', { className: 'dsh-lit-section-head' },
+      h('h3', { className: 'dsh-lit-title' }, props.title),
+      props.count != null ? h('span', { className: 'dsh-lit-mini' }, props.count) : null,
+      props.actions || null),
+    props.children)
+}
+
+// Each effect owns its response, so a slow request cannot replace a newer filter or workspace.
+function useResource(loader, dependencies) {
+  const [revision, setRevision] = React.useState(0)
+  const [state, setState] = React.useState({ data: null, loading: true, error: '' })
+  React.useEffect(function () {
+    let alive = true
+    setState({ data: null, loading: true, error: '' })
+    Promise.resolve().then(loader).then(function (data) {
+      if (alive) setState({ data: data, loading: false, error: '' })
+    }).catch(function (error) {
+      if (alive) setState({ data: null, loading: false, error: message(error) })
+    })
+    return function () { alive = false }
+  }, dependencies.concat(revision))
+  const reload = React.useCallback(function () { setRevision(function (value) { return value + 1 }) }, [])
+  return Object.assign({}, state, { reload: reload })
+}
+
+function EvidenceRow(props) {
+  const ev = props.ev
+  const stance = STANCE[ev.stance] ? ev.stance : 'contextual'
+  return h('article', { className: 'dsh-lit-evidence' },
+    h('div', { className: 'dsh-lit-actions' },
+      h('span', { className: 'dsh-lit-mini dsh-lit-stance-' + stance }, STANCE[ev.stance] || ev.stance || STANCE.contextual),
+      h('strong', { className: 'dsh-lit-content' }, ev.claim || '未命名主张'),
+      props.onDelete ? h(Button, { icon: 'close', title: '删除证据', className: 'dsh-lit-btn-danger', disabled: props.busy, onClick: function () { props.onDelete(ev) } }) : null),
+    ev.evidence_text ? h('blockquote', { className: 'dsh-lit-text' }, ev.evidence_text) : null,
+    h('div', { className: 'dsh-lit-meta' },
+      ev.chapter_anchor ? h('span', null, '章节 ' + ev.chapter_anchor) : null,
+      ev.page != null && ev.page !== '' ? h('span', null, '页码 ' + ev.page) : null,
+      ev.confidence != null ? h('span', null, '置信度 ' + Math.round(Number(ev.confidence) * 100) + '%') : null,
+      h('span', { className: 'dsh-lit-muted' }, '#' + ev.id),
+      ev.updated_at ? h('span', { className: 'dsh-lit-muted' }, fmtTime(ev.updated_at)) : null),
+    ev.note ? h('p', { className: 'dsh-lit-text dsh-lit-meta' }, ev.note) : null,
+    props.onOpenDocument && ev.doc_id ? h('div', null,
+      h(Button, { icon: 'open', onClick: function () { props.onOpenDocument(ev.doc_id) } }, '文档 #' + ev.doc_id)) : null)
+}
+
+function DocDetail(props) {
+  const { docId, workspaceId } = props
+  const docPath = pathFor('documents', docId, workspaceId)
+  const resource = useResource(function () {
+    return api(docPath).then(function (res) {
+      if (!res || !res.document) throw new Error('文档不存在')
+      return res.document
+    })
+  }, [docId, workspaceId])
+  const [busy, setBusy] = React.useState('')
+  const lock = React.useRef(false)
+  const [notice, setNotice] = React.useState(null)
+  const [claim, setClaim] = React.useState('')
+  const [stance, setStance] = React.useState('supporting')
+  const [text, setText] = React.useState('')
+  const fileRef = React.useRef(null)
+  const doc = resource.data
+
+  async function run(action, task, success) {
+    if (lock.current) return
+    lock.current = true
+    setBusy(action); setNotice(null)
+    try {
+      await task()
+      if (success) setNotice({ text: success, success: true })
+    } catch (error) { setNotice({ text: message(error), error: true }) }
+    finally { lock.current = false; setBusy('') }
+  }
+
+  function addEvidence(event) {
+    event.preventDefault()
+    if (!claim.trim()) return
+    run('evidence', async function () {
+      await api('/evidence', { method: 'POST', body: {
+        claim: claim.trim(), stance: stance, evidence_text: text.trim(), doc_id: Number(docId), workspace_id: workspaceId,
+      } })
+      setClaim(''); setText(''); resource.reload()
+    }, '证据已添加')
+  }
+
+  function removeEvidence(ev) {
+    if (!window.confirm('删除该证据？\n' + short(ev.claim, 90))) return
+    run('delete-evidence', async function () {
+      await api(pathFor('evidence', ev.id, workspaceId), { method: 'DELETE' })
+      resource.reload()
+    }, '证据已删除')
+  }
+
+  function upload(event) {
+    const file = event.target.files && event.target.files[0]
+    if (!file) return
+    run('upload', async function () {
+      try {
+        const form = new FormData()
+        form.append('file', file); form.append('workspace_id', workspaceId)
+        const res = await api('/attachments', { method: 'POST', body: form, raw: true })
+        if (!res || !res.attachment_path) throw new Error('上传响应缺少附件路径')
+        await api(docPath, { method: 'PATCH', body: { attachment_path: res.attachment_path, attachment_sha256: res.attachment_sha256 } })
+        resource.reload()
+      } finally { if (fileRef.current) fileRef.current.value = '' }
+    }, '附件已上传并关联')
+  }
+
+  function openAttachment() {
+    run('open', async function () {
+      const res = await api('/documents/' + encodeURIComponent(String(docId)) + '/attachment-url')
+      const url = res && (res.url || res.attachment_url)
+      if (!url) throw new Error('服务端未返回附件链接')
+      const target = new URL(url, window.location.href)
+      if (target.protocol !== 'https:' && target.protocol !== 'http:') throw new Error('附件链接无效')
+      const opened = window.open(url, '_blank')
+      if (opened) opened.opener = null
+      else setNotice({ text: '浏览器已阻止打开附件', error: true, attachmentUrl: url })
+    })
+  }
+
+  function archive() {
+    const next = doc.lifecycle_status === 'archived' ? 'active' : 'archived'
+    run('archive', async function () {
+      await api(docPath, { method: 'PATCH', body: { lifecycle_status: next } })
+      resource.reload()
+    }, next === 'archived' ? '文档已归档' : '文档已恢复')
+  }
+
+  function deleteDocument() {
+    if (!window.confirm('删除该文档？')) return
+    run('delete', async function () {
+      await api(docPath, { method: 'DELETE' })
+      props.onBack()
+    })
+  }
+
+  const navigation = h('div', { className: 'dsh-lit-actions' },
+    h(Button, { icon: 'back', title: props.backLabel || '返回文档列表', onClick: props.onBack }),
+    h('span', { className: 'dsh-lit-title' }, '文档 #' + docId),
+    h('span', { className: 'dsh-lit-count' }, resource.loading ? '加载中…' : ''),
+    h(Button, { icon: 'refresh', title: '刷新文档', onClick: resource.reload, disabled: resource.loading || !!busy }))
+
+  return h('div', { className: 'dsh-lit-stack', 'aria-busy': resource.loading },
+    navigation,
+    h(Notice, Object.assign({}, notice)),
+    notice && notice.attachmentUrl ? h('a', { className: 'dsh-lit-link', href: notice.attachmentUrl, target: '_blank', rel: 'noopener noreferrer' }, '打开附件') : null,
+    h(Notice, { text: resource.error, error: true, retry: resource.reload }),
+    doc ? h(React.Fragment, null,
+      h('div', { className: 'dsh-lit-stack' },
+        h('h2', { className: 'dsh-lit-heading' }, doc.title || '无题录'),
+        h('div', { className: 'dsh-lit-meta' },
+          doc.lifecycle_status === 'archived' ? archivedChip() : null,
+          list(doc.tags).map(function (tag, index) { return h('span', { key: index, className: 'dsh-lit-mini' }, String(tag)) }))),
+      h(Section, { title: '元数据', actions: h('div', { className: 'dsh-lit-actions dsh-lit-count' },
+        h(Button, { onClick: archive, disabled: !!busy }, doc.lifecycle_status === 'archived' ? '恢复' : '归档'),
+        h(Button, { className: 'dsh-lit-btn-danger', onClick: deleteDocument, disabled: !!busy }, '删除')) },
+        h(KV, { rows: [
+          ['类型', DOC_TYPE[doc.type] || doc.type], ['作者', list(doc.authors).join('、')], ['年份', doc.year],
+          ['期刊 / 出处', doc.journal],
+          ['DOI', doc.doi ? h('a', { className: 'dsh-lit-link', href: 'https://doi.org/' + encodeURIComponent(doc.doi), target: '_blank', rel: 'noopener noreferrer' }, doc.doi) : null],
+          ['ISBN', doc.isbn],
+          ['URL', doc.url ? h('a', { className: 'dsh-lit-link', href: doc.url, target: '_blank', rel: 'noopener noreferrer' }, doc.url) : null],
+          ['阅读状态', h('select', { className: 'dsh-lit-select', 'aria-label': '阅读状态', value: doc.read_status || 'unread', disabled: !!busy,
+            onChange: function (event) {
+              const value = event.target.value
+              run('read', async function () { await api(docPath, { method: 'PATCH', body: { read_status: value } }); resource.reload() }, '阅读状态已更新')
+            } }, Object.keys(READ_STATUS).map(function (key) { return h('option', { key: key, value: key }, READ_STATUS[key]) }))],
+          ['生命周期', doc.lifecycle_status === 'archived' ? '已归档' : '活动'],
+          ['工作区', doc.workspace_id], ['创建时间', fmtTime(doc.created_at)], ['更新时间', fmtTime(doc.updated_at)],
+        ] })),
+      h(Section, { title: '附件', actions: h('div', { className: 'dsh-lit-actions dsh-lit-count' },
+        h('input', { ref: fileRef, type: 'file', hidden: true, 'aria-label': '选择附件', disabled: !!busy, onChange: upload }),
+        h(Button, { icon: 'upload', disabled: !!busy, onClick: function () { fileRef.current.click() } }, busy === 'upload' ? '上传中…' : '上传附件'),
+        doc.attachment_path ? h(Button, { icon: 'open', disabled: !!busy, onClick: openAttachment }, busy === 'open' ? '打开中…' : '打开') : null) },
+        doc.attachment_path ? h(KV, { rows: [['路径', doc.attachment_path], ['SHA256', doc.attachment_sha256]] }) : h(Empty, null, '暂无附件')),
+      h(Section, { title: '关联证据', count: list(doc.evidence).length },
+        list(doc.evidence).length ? list(doc.evidence).map(function (ev) {
+          return h(EvidenceRow, { key: ev.id, ev: ev, busy: !!busy, onDelete: removeEvidence })
+        }) : h(Empty, null, '暂无关联证据')),
+      h(Section, { title: '新增证据' },
+        h('form', { className: 'dsh-lit-form', onSubmit: addEvidence },
+          h('label', { className: 'dsh-lit-field' }, '主张',
+            h('input', { className: 'dsh-lit-input', required: true, value: claim, onChange: function (event) { setClaim(event.target.value) } })),
+          h('label', { className: 'dsh-lit-field' }, '立场',
+            h('select', { className: 'dsh-lit-select', value: stance, onChange: function (event) { setStance(event.target.value) } },
+              Object.keys(STANCE).map(function (key) { return h('option', { key: key, value: key }, STANCE[key]) }))),
+          h('label', { className: 'dsh-lit-field dsh-lit-field-wide' }, '原文摘录',
+            h('textarea', { className: 'dsh-lit-input', value: text, onChange: function (event) { setText(event.target.value) } })),
+          h(Button, { type: 'submit', icon: 'add', className: 'dsh-lit-btn-primary', disabled: !!busy || !claim.trim() }, busy === 'evidence' ? '添加中…' : '添加证据'))),
+      h('details', { className: 'dsh-lit-section dsh-lit-details' },
+        h('summary', null, '摘要 / 全文' + (doc.full_text ? ' · ' + String(doc.full_text).length + ' 字符' : '')),
+        doc.full_text ? h('pre', { className: 'dsh-lit-pre' }, String(doc.full_text)) : h(Empty, null, '暂无全文'))
+    ) : null)
+}
+
+function DocumentsView(props) {
+  const workspaceId = props.workspaceId
+  const [input, setInput] = React.useState('')
+  const [query, setQuery] = React.useState('')
+  const [includeArchived, setIncludeArchived] = React.useState(false)
+  const [openId, setOpenId] = React.useState(null)
+  const resource = useResource(function () {
+    return api('/documents' + qs({ workspace_id: workspaceId, q: query, include_archived: includeArchived }))
+      .then(function (res) { return list(res && res.documents) })
+  }, [workspaceId, query, includeArchived])
+  if (openId != null) return h(DocDetail, { key: openId, docId: openId, workspaceId: workspaceId,
+    onBack: function () { setOpenId(null); resource.reload() } })
+  const docs = resource.data || []
+  return h('div', { className: 'dsh-lit-stack', 'aria-busy': resource.loading },
+    h('div', { className: 'dsh-lit-actions' },
+      h('form', { className: 'dsh-lit-search', role: 'search', onSubmit: function (event) { event.preventDefault(); if (query === input.trim()) resource.reload(); else setQuery(input.trim()) } },
+        h('input', { className: 'dsh-lit-input', type: 'search', 'aria-label': '检索文档', placeholder: '标题、作者、期刊、标签', value: input, onChange: function (event) { setInput(event.target.value) } }),
+        h(Button, { type: 'submit', icon: 'search', title: '检索文档' })),
+      h(ArchiveCheck, { value: includeArchived, onChange: setIncludeArchived }),
+      h(Button, { icon: 'refresh', title: '刷新文档列表', disabled: resource.loading, onClick: resource.reload }),
+      h('span', { className: 'dsh-lit-count', role: 'status' }, resource.loading ? '加载中…' : docs.length + ' 篇')),
+    h(Notice, { text: resource.error, error: true, retry: resource.reload }),
+    h('div', { className: 'dsh-lit-list' },
+      docs.map(function (doc) {
+        return h('button', { key: doc.id, type: 'button', className: 'dsh-lit-rowbtn', onClick: function () { setOpenId(doc.id) } },
+          h('span', { className: 'dsh-lit-row-icon', 'aria-hidden': true }, '📄'),
+          h('span', { className: 'dsh-lit-content' },
+            h('span', { className: 'dsh-lit-actions' },
+              h('strong', { className: 'dsh-lit-content' }, doc.title || '无题录'),
+              h('span', { className: 'dsh-lit-badge' }, READ_STATUS[doc.read_status] || doc.read_status || READ_STATUS.unread),
+              doc.lifecycle_status === 'archived' ? archivedChip() : null),
+            h('span', { className: 'dsh-lit-meta' },
+              h('span', null, list(doc.authors).join('、') || '佚名'),
+              doc.year ? h('span', null, String(doc.year)) : null,
+              doc.journal ? h('span', null, doc.journal) : null),
+            h('span', { className: 'dsh-lit-meta' },
+              doc.type ? h('span', { className: 'dsh-lit-mini' }, DOC_TYPE[doc.type] || doc.type) : null,
+              list(doc.tags).map(function (tag, index) { return h('span', { key: index, className: 'dsh-lit-mini' }, String(tag)) }))))
+      }),
+      !docs.length && !resource.error ? h(Empty, null, resource.loading ? '加载文档…' : query ? '没有匹配的文档' : '暂无文档') : null))
+}
+
+// Preserve the existing deepmemory-style force layout.
 function buildGraphLayout(nodes, edges, width, height, seed) {
   const out = {}
   const n = nodes.length
@@ -290,1003 +575,523 @@ function buildGraphLayout(nodes, edges, width, height, seed) {
   return out
 }
 
-// ══════════════════════════════════════════════════════════════════
-// 1) 文档视窗（文献列表 / 检索 / 详情）
-// ══════════════════════════════════════════════════════════════════
-function EvidenceRow(props) {
-  const ev = props.ev
-  const onDelete = props.onDelete
-  const row = h('div', { className: 'dsh-lit-ev', key: props.key != null ? props.key : String(ev.id) },
-    h('div', { className: 'dsh-lit-ev-head' },
-      stanceChip(ev.stance, 'stance'),
-      h('div', { className: 'dsh-lit-ev-claim' }, String(ev.claim || '')),
-      onDelete ? h('button', {
-        className: 'dsh-lit-btn dsh-lit-btn-mini dsh-lit-btn-danger', title: '删除该证据',
-        onClick: function (e) { e.stopPropagation(); onDelete(ev) },
-      }, '✕') : null,
-    ),
-    ev.evidence_text
-      ? h('div', { className: 'dsh-lit-ev-text' }, String(ev.evidence_text))
-      : null,
-    h('div', { className: 'dsh-lit-ev-foot' },
-      ev.chapter_anchor ? h('span', { className: 'dsh-lit-meta' }, '章节: ' + ev.chapter_anchor) : null,
-      ev.page ? h('span', { className: 'dsh-lit-meta' }, '页码: ' + ev.page) : null,
-      ev.confidence != null ? h('span', { className: 'dsh-lit-meta' }, '置信度: ' + Math.round(Number(ev.confidence) * 100) + '%') : null,
-      ev.note ? h('span', { className: 'dsh-lit-meta' }, '备注: ' + short(ev.note, 60)) : null,
-      h('span', { className: 'dsh-lit-muted' }, '#' + ev.id + (ev.updated_at ? ' · ' + fmtTime(ev.updated_at) : '')),
-    ),
-  )
-  return row
-}
-
-/** 文档详情视窗：元数据 + 附件 + 关联证据。 */
-function DocDetail(props) {
-  const { docId, workspaceId, onBack, onDeleted } = props
-  const [data, setData] = React.useState(null)
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState('')
-  const [msg, setMsg] = React.useState('')
-  // 新增证据表单
-  const [evClaim, setEvClaim] = React.useState('')
-  const [evStance, setEvStance] = React.useState('supporting')
-  const [evText, setEvText] = React.useState('')
-  const [evBusy, setEvBusy] = React.useState(false)
-  // 附件上传
-  const [uploading, setUploading] = React.useState(false)
-  const fileRef = React.useRef(null)
-
-  async function load() {
-    setLoading(true); setError('')
-    try {
-      const res = await api('/documents/' + encodeURIComponent(String(docId)))
-      setData((res && res.document) || null)
-    } catch (e) { setError(String((e && e.message) || e)) }
-    finally { setLoading(false) }
-  }
-  React.useEffect(function () { load() }, [docId])
-
-  async function addEvidence() {
-    const claim = evClaim.trim()
-    if (!claim) { setMsg('请填写主张（claim）'); return }
-    setEvBusy(true); setMsg('')
-    try {
-      await api('/evidence', { method: 'POST', body: { claim: claim, stance: evStance, evidence_text: evText.trim(), doc_id: Number(docId), workspace_id: workspaceId } })
-      setEvClaim(''); setEvText('')
-      setMsg('证据已添加')
-      await load()
-    } catch (e) { setMsg('添加失败: ' + String((e && e.message) || e)) }
-    finally { setEvBusy(false) }
-  }
-
-  async function removeEvidence(ev) {
-    if (!window.confirm('删除该证据（软删，可恢复）？\n' + short(ev.claim, 90))) return
-    try { await api('/evidence/' + String(ev.id), { method: 'DELETE' }); await load() }
-    catch (e) { setMsg('删除失败: ' + String((e && e.message) || e)) }
-  }
-
-  async function onFile(e) {
-    const file = e.target.files && e.target.files[0]
-    if (!file) return
-    setUploading(true); setMsg('')
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('workspace_id', workspaceId)
-      const up = await api('/attachments', { method: 'POST', body: fd, raw: true })
-      if (!up || !up.attachment_path) throw new Error('上传响应缺少 attachment_path')
-      await api('/documents/' + String(docId), { method: 'PATCH', body: { attachment_path: up.attachment_path, attachment_sha256: up.attachment_sha256 } })
-      setMsg('附件已上传并关联（' + up.attachment_path + (up.size ? ' · ' + Math.round(up.size / 1024) + ' KB' : '') + '）')
-      await load()
-    } catch (err) { setMsg('附件上传失败: ' + String((err && err.message) || err)) }
-    finally { setUploading(false); if (fileRef.current) fileRef.current.value = '' }
-  }
-
-  async function openAttachment() {
-    setMsg('')
-    try {
-      const res = await api('/documents/' + String(docId) + '/attachment-url')
-      const url = res && (res.url || res.attachment_url)
-      if (url) window.open(url, '_blank')
-      else setMsg('服务端未返回附件直链')
-    } catch (e) {
-      setMsg('附件直链不可用（' + String((e && e.message) || e) + '）——本服务未开放附件签名直链，仅展示元数据')
-    }
-  }
-
-  async function toggleArchive() {
-    const next = data.lifecycle_status === 'archived' ? 'active' : 'archived'
-    try {
-      await api('/documents/' + String(docId), { method: 'PATCH', body: { lifecycle_status: next } })
-      setMsg(next === 'archived' ? '已归档（列表含归档可见）' : '已恢复为活动')
-      await load()
-    } catch (e) { setMsg('操作失败: ' + String((e && e.message) || e)) }
-  }
-
-  async function changeRead(v) {
-    try { await api('/documents/' + String(docId), { method: 'PATCH', body: { read_status: v } }); await load() }
-    catch (e) { setMsg('更新失败: ' + String((e && e.message) || e)) }
-  }
-
-  async function delDoc() {
-    if (!window.confirm('彻底软删该文献？删除后将从列表消失。')) return
-    try { await api('/documents/' + String(docId), { method: 'DELETE' }); if (onDeleted) onDeleted(); }
-    catch (e) { setMsg('删除失败: ' + String((e && e.message) || e)) }
-  }
-
-  if (loading && !data) return h('div', null, '加载文献详情…')
-  if (error && !data) return h('div', { className: 'dsh-lit-err' }, error)
-  if (!data) return null
-  const doc = data
-
-  const metaRows = []
-  const metaKv = function (k, v) {
-    metaRows.push(h('span', { key: k + '-k', className: 'dsh-lit-k' }, k))
-    metaRows.push(h('span', { key: k + '-v', className: 'dsh-lit-v' }, v == null || v === '' ? '—' : v))
-  }
-  metaKv('类型', DOC_TYPE[doc.type] || String(doc.type || '—'))
-  metaKv('作者', Array.isArray(doc.authors) && doc.authors.length ? doc.authors.join('、') : '—')
-  metaKv('年份', doc.year != null ? String(doc.year) : '—')
-  metaKv('期刊/出处', doc.journal || '—')
-  metaKv('DOI', doc.doi
-    ? h('a', { key: 'doi', className: 'dsh-lit-link', href: 'https://doi.org/' + encodeURIComponent(doc.doi), target: '_blank', rel: 'noreferrer' }, doc.doi)
-    : '—')
-  metaKv('ISBN', doc.isbn || '—')
-  metaKv('URL', doc.url ? h('a', { key: 'url', className: 'dsh-lit-link', href: doc.url, target: '_blank', rel: 'noreferrer' }, short(doc.url, 60)) : '—')
-  metaKv('阅读状态', h('select', {
-    key: 'rs', className: 'dsh-lit-select', value: doc.read_status || 'unread',
-    onChange: function (e) { changeRead(e.target.value) },
-  }, Object.keys(READ_STATUS).map(function (k) {
-    return h('option', { key: k, value: k }, READ_STATUS[k] + ' (' + k + ')')
-  })))
-  metaKv('生命周期', doc.lifecycle_status === 'archived' ? '已归档' : '活动')
-  metaKv('创建时间', fmtTime(doc.created_at))
-  metaKv('更新时间', fmtTime(doc.updated_at))
-  metaKv('工作区', doc.workspace_id || '—')
-
-  const evidences = Array.isArray(doc.evidence) ? doc.evidence : []
-  const attachments = h('div', { className: 'dsh-lit-card', key: 'att' },
-    h('div', { className: 'dsh-lit-toolbar' },
-      h('span', { className: 'dsh-lit-meta', style: { flex: 1, fontWeight: 600 } }, '附件'),
-      !doc.attachment_path ? h('span', { className: 'dsh-lit-muted' }, '（无附件）') : null,
-      h('input', { ref: fileRef, type: 'file', style: { display: 'none' }, onChange: onFile }),
-      h('button', { className: 'dsh-lit-btn dsh-lit-btn-mini', disabled: uploading, onClick: function () { if (fileRef.current) fileRef.current.click() } }, uploading ? '上传中…' : '上传附件'),
-      doc.attachment_path ? h('button', { className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: openAttachment }, '打开') : null,
-    ),
-    doc.attachment_path ? h('div', { className: 'dsh-lit-kv', style: { marginTop: 8 } }, [
-      h('span', { key: 'p1', className: 'dsh-lit-k' }, '路径'),
-      h('span', { key: 'p2', className: 'dsh-lit-v' }, short(doc.attachment_path, 80)),
-      h('span', { key: 'h1', className: 'dsh-lit-k' }, 'SHA256'),
-      h('span', { key: 'h2', className: 'dsh-lit-v', style: { fontFamily: 'monospace' } }, short(doc.attachment_sha256 || '—', 40)),
-    ]) : null,
-  )
-
-  const evidenceBox = h('div', { className: 'dsh-lit-card', key: 'evs' },
-    h('div', { className: 'dsh-lit-toolbar', style: { marginBottom: 6 } },
-      h('span', { className: 'dsh-lit-meta', style: { flex: 1, fontWeight: 600 } }, '关联证据 · ' + evidences.length + ' 条'),
-      h('span', { className: 'dsh-lit-muted' }, '点击 ✕ 软删'),
-    ),
-    evidences.length
-      ? h('div', { className: 'dsh-lit-list' }, evidences.map(function (ev) {
-        return h(EvidenceRow, { key: 'ev' + ev.id, ev: ev, onDelete: removeEvidence })
-      }))
-      : h('div', { className: 'dsh-lit-empty' }, '（该文献下暂无证据）'),
-    h('div', { className: 'dsh-lit-sect-h' }, '新增证据'),
-    h('div', { className: 'dsh-lit-form' },
-      h('div', { className: 'dsh-lit-field', style: { flex: '1 1 260px' } },
-        h('label', null, '主张 claim *'),
-        h('input', { className: 'dsh-lit-input', value: evClaim, placeholder: '一句话主张（如：该论文支持提示缓存可降低 41–80% 成本）', onChange: function (e) { setEvClaim(e.target.value) } }),
-      ),
-      h('div', { className: 'dsh-lit-field' },
-        h('label', null, '立场'),
-        h('select', { className: 'dsh-lit-select', value: evStance, onChange: function (e) { setEvStance(e.target.value) } },
-          Object.keys(STANCE).map(function (k) { return h('option', { key: k, value: k }, STANCE[k]) })),
-      ),
-      h('div', { className: 'dsh-lit-field', style: { flex: '1 1 100%' } },
-        h('label', null, '原文摘录 evidence_text（可空）'),
-        h('textarea', { className: 'dsh-lit-input', style: { minHeight: 52, resize: 'vertical' }, value: evText, placeholder: '带章节/页码定位的原文摘录…', onChange: function (e) { setEvText(e.target.value) } }),
-      ),
-      h('button', { className: 'dsh-lit-btn dsh-lit-btn-primary', disabled: evBusy, onClick: addEvidence }, evBusy ? '添加中…' : '添加证据'),
-    ),
-  )
-
-  const fullText = doc.full_text
-    ? h('details', { key: 'ft', className: 'dsh-lit-details dsh-lit-card' },
-      h('summary', null, '摘要/全文（' + doc.full_text.length + ' 字符）'),
-      h('div', { className: 'dsh-lit-pre' }, String(doc.full_text)),
-    )
-    : null
-
-  return h('div', null, [
-    h('div', { key: 'nav', className: 'dsh-lit-toolbar' },
-      h('button', { className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: onBack }, '← 返回文档列表'),
-      h('span', { className: 'dsh-lit-muted' }, '文献 #' + doc.id),
-      msg ? h('span', { key: 'msg', className: msg.indexOf('失败') >= 0 || msg.indexOf('不可用') >= 0 ? 'dsh-lit-err' : 'dsh-lit-ok', style: { flex: 1 } }, msg) : h('span', { style: { flex: 1 } }),
-      h('button', { key: 'arc', className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: toggleArchive }, doc.lifecycle_status === 'archived' ? '恢复为活动' : '归档'),
-      h('button', { key: 'del', className: 'dsh-lit-btn dsh-lit-btn-mini dsh-lit-btn-danger', onClick: delDoc }, '删除'),
-    ),
-    h('div', { key: 't', className: 'dsh-lit-item-title', style: { fontSize: 15, marginTop: 6 } },
-      h('span', { className: 'dsh-lit-tt' }, doc.title || '(无题录)'),
-      doc.lifecycle_status === 'archived' ? h('span', { key: 'a', className: 'dsh-lit-tag dsh-lit-arch-badge' }, '已归档') : null,
-    ),
-    h('div', { key: 'tags', className: 'dsh-lit-meta', style: { marginTop: 4 } },
-      (Array.isArray(doc.tags) ? doc.tags : []).map(function (t, i) { return h('span', { key: 'tg' + i, className: 'dsh-lit-tag' }, String(t)) }),
-      (doc.authors && doc.authors.length) ? h('span', { className: 'dsh-lit-muted' }, (doc.authors || []).length + ' 位作者') : null,
-    ),
-    h('div', { key: 'meta', className: 'dsh-lit-card', style: { marginTop: 10 } },
-      h('div', { className: 'dsh-lit-kv' }, metaRows),
-    ),
-    h('div', { key: 'attsec', style: { marginTop: 10 } }, attachments),
-    h('div', { key: 'evsec', style: { marginTop: 10 } }, evidenceBox),
-    fullText ? h('div', { key: 'ftsec', style: { marginTop: 10 } }, fullText) : null,
-  ])
-}
-
-function DocumentsView(props) {
-  const workspaceId = props.workspaceId
-  const [docs, setDocs] = React.useState([])
-  const [query, setQuery] = React.useState('')
-  const [input, setInput] = React.useState('')
-  const [includeArchived, setIncludeArchived] = React.useState(false)
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState('')
-  const [openId, setOpenId] = React.useState(null)
-
-  async function load() {
-    setLoading(true); setError('')
-    try {
-      const res = await api('/documents' + qs({ workspace_id: workspaceId, q: query || '', include_archived: includeArchived || '' }))
-      setDocs((res && res.documents) || [])
-    } catch (e) { setError(String((e && e.message) || e)) }
-    finally { setLoading(false) }
-  }
-  React.useEffect(function () { load() }, [query, includeArchived])
-
-  function doSearch() { setQuery(input.trim()) }
-  function backFromDetail() { setOpenId(null); load() }
-
-  if (openId != null) {
-    return h(DocDetail, { docId: openId, workspaceId: workspaceId, onBack: backFromDetail, onDeleted: backFromDetail })
-  }
-
-  return h('div', null, [
-    h('div', { key: 'toolbar', className: 'dsh-lit-toolbar' },
-      h('input', { key: 'q', className: 'dsh-lit-input', style: { maxWidth: 320 }, value: input, placeholder: '检索标题 / 作者 / 期刊 / 标签…', onChange: function (e) { setInput(e.target.value) }, onKeyDown: function (e) { if (e.key === 'Enter') doSearch() } }),
-      h('button', { key: 's', className: 'dsh-lit-btn', onClick: doSearch }, '检索'),
-      h('button', { key: 'r', className: 'dsh-lit-btn', onClick: function () { setInput(query); load() }, disabled: loading }, '刷新'),
-      h('label', { key: 'arch', className: 'dsh-lit-meta', style: { cursor: 'pointer', gap: 4 } },
-        h('input', { type: 'checkbox', checked: includeArchived, onChange: function (e) { setIncludeArchived(e.target.checked) } }),
-        '含归档',
-      ),
-      h('span', { key: 'c', className: 'dsh-lit-count' }, '共 ' + docs.length + ' 篇'),
-      error ? h('span', { key: 'e', className: 'dsh-lit-err' }, error) : null,
-    ),
-    h('div', { key: 'list', className: 'dsh-lit-list dsh-lit-scroll', style: { marginTop: 8 } },
-      docs.length
-        ? docs.map(function (d) {
-          const tags = Array.isArray(d.tags) ? d.tags : []
-          const authors = Array.isArray(d.authors) ? d.authors : []
-          const isArch = d.lifecycle_status === 'archived'
-          return h('button', { key: String(d.id), className: 'dsh-lit-item', onClick: function () { setOpenId(d.id) } },
-            h('div', { className: 'dsh-lit-item-title' },
-              h('span', { className: 'dsh-lit-tt' }, d.title || '(无题录)'),
-              isArch ? h('span', { key: 'arch', className: 'dsh-lit-tag dsh-lit-arch-badge' }, '归档') : null,
-              h('span', { key: 'rs', className: 'dsh-lit-tag' }, READ_STATUS[d.read_status] || d.read_status || '未读'),
-            ),
-            h('div', { className: 'dsh-lit-meta', style: { marginTop: 3 } },
-              h('span', { key: 'au' }, authors.length ? authors.slice(0, 4).join('、') + (authors.length > 4 ? ' 等' : '') : '佚名'),
-              d.year ? h('span', { key: 'yr' }, '· ' + d.year) : null,
-              d.journal ? h('span', { key: 'jl' }, '· ' + short(d.journal, 40)) : null,
-              d.type ? h('span', { key: 'ty', className: 'dsh-lit-tag' }, DOC_TYPE[d.type] || d.type) : null,
-            ),
-            tags.length ? h('div', { className: 'dsh-lit-meta', style: { marginTop: 4 } },
-              tags.slice(0, 6).map(function (t, i) { return h('span', { key: String(i), className: 'dsh-lit-tag' }, String(t)) })) : null,
-          )
-        })
-        : h('div', { className: 'dsh-lit-empty' }, loading ? '加载中…' : '（暂无文献。可通过代理/后台导入，或在此查看已有条目）'),
-    ),
-  ])
-}
-
-// ══════════════════════════════════════════════════════════════════
-// 2) 知识视窗（列表 + 可选知识库过滤 + 含归档 + 详情）
-// ══════════════════════════════════════════════════════════════════
 function KnowledgeDetail(props) {
-  const { kid, workspaceId, onBack } = props
-  const [data, setData] = React.useState(null)
-  const [evs, setEvs] = React.useState(null)
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState('')
-
-  React.useEffect(function () {
-    let alive = true
-    async function load() {
-      setLoading(true); setError(''); setData(null); setEvs(null)
+  const { kid, workspaceId } = props
+  const [docId, setDocId] = React.useState(null)
+  const resource = useResource(async function () {
+    const res = await api(pathFor('knowledge', kid, workspaceId))
+    if (!res || !res.knowledge) throw new Error('知识条目不存在')
+    const item = res.knowledge
+    const evidence = await Promise.all(list(item.sources).map(async function (id) {
       try {
-        const res = await api('/knowledge/' + encodeURIComponent(String(kid)))
-        const item = (res && res.knowledge) || null
-        if (!alive) return
-        setData(item)
-        if (item) {
-          const ids = Array.isArray(item.sources) ? item.sources : []
-          const fetched = await Promise.all(ids.map(function (id) {
-            return api('/evidence/' + encodeURIComponent(String(id)))
-              .then(function (r) { return { ok: true, evidence: (r && r.evidence) || null } })
-              .catch(function () { return { ok: false, id: id } })
-          }))
-          if (alive) setEvs(fetched.filter(function (f) { return f.ok && f.evidence }))
-        }
-      } catch (e) {
-        if (alive) setError(String((e && e.message) || e))
-      } finally {
-        if (alive) setLoading(false)
-      }
-    }
-    load()
-    return function () { alive = false }
-  }, [kid])
-
-  if (loading) return h('div', null, '加载知识条目详情…')
-  if (error) return h('div', { className: 'dsh-lit-err' }, error)
-  if (!data) return h('div', { className: 'dsh-lit-empty' }, '（条目不存在）')
-  const it = data
-  const isArch = isArchived(it)
-  const rels = Array.isArray(it.relations) ? it.relations : []
-  const srcs = Array.isArray(evs) ? evs : []
-
-  const rows = []
-  rows.push(h('span', { key: 'k1', className: 'dsh-lit-k' }, '知识库'))
-  rows.push(h('span', { key: 'v1', className: 'dsh-lit-v' }, [libraryChip(it.library, 'lib')]))
-  rows.push(h('span', { key: 'k2', className: 'dsh-lit-k' }, '归档'))
-  rows.push(h('span', { key: 'v2', className: 'dsh-lit-v' }, isArch ? h('span', { key: 'a', className: 'dsh-lit-tag dsh-lit-arch-badge' }, '已归档') : h('span', { key: 'a', className: 'dsh-lit-tag' }, '活动')))
-  rows.push(h('span', { key: 'k3', className: 'dsh-lit-k' }, 'source_memory_id'))
-  rows.push(h('span', { key: 'v3', className: 'dsh-lit-v' }, it.source_memory_id != null ? String(it.source_memory_id) : '—'))
-  rows.push(h('span', { key: 'k4', className: 'dsh-lit-k' }, '条目 ID'))
-  rows.push(h('span', { key: 'v4', className: 'dsh-lit-v' }, String(it.id)))
-  rows.push(h('span', { key: 'k5', className: 'dsh-lit-k' }, '工作区'))
-  rows.push(h('span', { key: 'v5', className: 'dsh-lit-v' }, it.workspace_id || '—'))
-  rows.push(h('span', { key: 'k6', className: 'dsh-lit-k' }, '创建时间'))
-  rows.push(h('span', { key: 'v6', className: 'dsh-lit-v' }, fmtTime(it.created_at)))
-  rows.push(h('span', { key: 'k7', className: 'dsh-lit-k' }, '更新时间'))
-  rows.push(h('span', { key: 'v7', className: 'dsh-lit-v' }, fmtTime(it.updated_at)))
-
-  return h('div', null, [
-    h('div', { key: 'nav', className: 'dsh-lit-toolbar' },
-      h('button', { className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: onBack }, '← 返回知识列表'),
-      h('span', { className: 'dsh-lit-muted' }, '知识点 #' + it.id),
-    ),
-    h('div', { key: 't', className: 'dsh-lit-item-title', style: { fontSize: 16, marginTop: 6 } },
-      h('span', { className: 'dsh-lit-tt' }, it.concept || '(无概念名)'),
-      isArch ? h('span', { key: 'a', className: 'dsh-lit-tag dsh-lit-arch-badge' }, '已归档') : null,
-    ),
-    h('div', { key: 'meta', className: 'dsh-lit-card', style: { marginTop: 10 } },
-      h('div', { className: 'dsh-lit-kv' }, rows),
-    ),
-    h('div', { key: 'sum', className: 'dsh-lit-card', style: { marginTop: 10 } },
-      h('div', { className: 'dsh-lit-meta', style: { fontWeight: 600, marginBottom: 4 } }, '摘要 summary'),
-      it.summary ? h('div', { className: 'dsh-lit-ev-text' }, String(it.summary)) : h('div', { className: 'dsh-lit-empty' }, '（无摘要）'),
-      h('div', { className: 'dsh-lit-sect-h', style: { marginBottom: 2 } }, '笔记 notes'),
-      it.notes ? h('div', { className: 'dsh-lit-pre' }, String(it.notes)) : h('div', { className: 'dsh-lit-empty' }, '（无笔记）'),
-    ),
-    h('div', { key: 'rel', className: 'dsh-lit-card', style: { marginTop: 10 } },
-      h('div', { className: 'dsh-lit-meta', style: { fontWeight: 600, marginBottom: 4 } }, '关联关系 relations · ' + rels.length),
-      rels.length
-        ? h('div', { className: 'dsh-lit-list' }, rels.map(function (r, i) {
-          const srcIsSelf = String(r.source) === String(it.concept) || String(r.source_id) === String(it.id)
-          const dstIsSelf = String(r.target) === String(it.concept) || String(r.target_id) === String(it.id)
-          return h('div', { key: 'r' + i, className: 'dsh-lit-ev' },
-            h('div', { className: 'dsh-lit-ev-head', style: { alignItems: 'center' } },
-              h('span', { className: 'dsh-lit-ev-claim', style: srcIsSelf ? {} : { fontWeight: 400, opacity: .85 } },
-                (srcIsSelf ? '（本条）' : '') + String(r.source == null ? r.source_id : r.source)),
-              h('span', { className: 'dsh-lit-tag', style: { borderColor: '#60a5fa66', color: '#60a5fa' } }, '—' + String(r.relation || '关联') + '→'),
-              h('span', { className: 'dsh-lit-ev-claim', style: dstIsSelf ? {} : { fontWeight: 400, opacity: .85 } },
-                String(r.target == null ? r.target_id : r.target) + (dstIsSelf ? '（本条）' : '')),
-            ),
-            h('div', { className: 'dsh-lit-ev-foot' },
-              h('span', { className: 'dsh-lit-muted' }, '#' + r.source_id + ' → #' + r.target_id)),
-          )
-        }))
-        : h('div', { className: 'dsh-lit-empty' }, '（暂无关联关系）'),
-    ),
-    h('div', { key: 'src', className: 'dsh-lit-card', style: { marginTop: 10 } },
-      h('div', { className: 'dsh-lit-meta', style: { fontWeight: 600, marginBottom: 4 } }, '关联证据 evidence_source · ' + srcs.length),
-      srcs.length
-        ? h('div', { className: 'dsh-lit-list' }, srcs.map(function (f) {
-          const ev = f.evidence
-          return h(EvidenceRow, { key: 'es' + ev.id, ev: ev })
-        }))
-        : h('div', { className: 'dsh-lit-empty' }, '（暂无关联证据）'),
-    ),
-  ])
+        const result = await api(pathFor('evidence', id, workspaceId))
+        if (!result || !result.evidence) throw new Error('证据不存在')
+        return { id: id, evidence: result.evidence }
+      } catch (error) { return { id: id, error: message(error) } }
+    }))
+    return { item: item, evidence: evidence }
+  }, [kid, workspaceId])
+  if (docId != null) return h(DocDetail, { key: docId, docId: docId, workspaceId: workspaceId, backLabel: '返回知识详情', onBack: function () { setDocId(null); resource.reload() } })
+  const data = resource.data
+  const item = data && data.item
+  return h('div', { className: 'dsh-lit-stack', 'aria-busy': resource.loading },
+    h('div', { className: 'dsh-lit-actions' },
+      h(Button, { icon: 'back', title: props.backLabel || '返回知识列表', onClick: props.onBack }),
+      h('span', { className: 'dsh-lit-title' }, '知识 #' + kid),
+      h('span', { className: 'dsh-lit-count' }, resource.loading ? '加载中…' : ''),
+      h(Button, { icon: 'refresh', title: '刷新知识详情', onClick: resource.reload, disabled: resource.loading })),
+    h(Notice, { text: resource.error, error: true, retry: resource.reload }),
+    item ? h(React.Fragment, null,
+      h('h2', { className: 'dsh-lit-heading' }, item.concept || '无概念名'),
+      h(Section, { title: '条目信息' }, h(KV, { rows: [
+        ['知识库', libraryChip(item.library)], ['状态', isArchived(item) ? archivedChip() : '活动'],
+        ['source_memory_id', item.source_memory_id], ['条目 ID', String(item.id)], ['工作区', item.workspace_id],
+        ['创建时间', fmtTime(item.created_at)], ['更新时间', fmtTime(item.updated_at)],
+      ] })),
+      h(Section, { title: '摘要' }, item.summary ? h('p', { className: 'dsh-lit-text' }, item.summary) : h(Empty, null, '暂无摘要')),
+      h(Section, { title: '笔记' }, item.notes ? h('p', { className: 'dsh-lit-text' }, item.notes) : h(Empty, null, '暂无笔记')),
+      h(Section, { title: '关联关系', count: list(item.relations).length },
+        list(item.relations).length ? list(item.relations).map(function (relation, index) {
+          return h('div', { key: index, className: 'dsh-lit-row' },
+            h('div', { className: 'dsh-lit-relation' },
+              h('span', { className: 'dsh-lit-content' }, String(relation.source == null ? relation.source_id : relation.source)),
+              h('span', { className: 'dsh-lit-mini' }, String(relation.relation || '关联') + ' →'),
+              h('span', { className: 'dsh-lit-content' }, String(relation.target == null ? relation.target_id : relation.target))))
+        }) : h(Empty, null, '暂无关联关系')),
+      h(Section, { title: '关联证据', count: data.evidence.length },
+        data.evidence.length ? data.evidence.map(function (result) {
+          return result.evidence ? h(EvidenceRow, { key: result.id, ev: result.evidence, onOpenDocument: setDocId })
+            : h(Notice, { key: result.id, text: '证据 #' + result.id + '：' + result.error, error: true, retry: resource.reload })
+        }) : h(Empty, null, '暂无关联证据'))
+    ) : null)
 }
 
 function KnowledgeView(props) {
   const workspaceId = props.workspaceId
-  const initialId = props.focusId
-  const [items, setItems] = React.useState([])
   const [library, setLibrary] = React.useState('')
   const [includeArchived, setIncludeArchived] = React.useState(false)
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState('')
-  const [openId, setOpenId] = React.useState(initialId != null ? initialId : null)
-
-  React.useEffect(function () {
-    let alive = true
-    async function load() {
-      setLoading(true); setError('')
-      const ws = qs({ workspace_id: workspaceId, library: library || '', archived: includeArchived || '', k: 300 })
-      try {
-        if (includeArchived) {
-          // “含归档”：active + archived 两个批次合并展示，条目上带归档标记
-          const [a, b] = await Promise.all([
-            api('/knowledge-browse' + qs({ workspace_id: workspaceId, library: library || '', archived: false, k: 300 })),
-            api('/knowledge-browse' + qs({ workspace_id: workspaceId, library: library || '', archived: true, k: 300 })),
-          ])
-          if (!alive) return
-          const merged = (a.items || []).concat(b.items || [])
-          merged.sort(function (x, y) { return Number(y.id) - Number(x.id) })
-          setItems(merged)
-        } else {
-          const res = await api('/knowledge-browse' + ws)
-          if (!alive) return
-          setItems((res && res.items) || [])
-        }
-      } catch (e) {
-        if (alive) setError(String((e && e.message) || e))
-      } finally {
-        if (alive) setLoading(false)
-      }
-    }
-    load()
-    return function () { alive = false }
+  const [openId, setOpenId] = React.useState(null)
+  const resource = useResource(async function () {
+    const results = await Promise.all((includeArchived ? [false, true] : [false]).map(function (archived) {
+      return api('/knowledge-browse' + qs({ workspace_id: workspaceId, library: library, archived: archived, k: 1000 }))
+    }))
+    const byId = new Map()
+    results.forEach(function (result) { list(result && result.items).forEach(function (item) { byId.set(String(item.id), item) }) })
+    return Array.from(byId.values()).sort(function (a, b) { return Number(b.id) - Number(a.id) })
   }, [workspaceId, library, includeArchived])
-
-  React.useEffect(function () {
-    if (initialId != null && props.onFocusConsumed) props.onFocusConsumed()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  if (openId != null) {
-    return h(KnowledgeDetail, { kid: openId, workspaceId: workspaceId, onBack: function () { setOpenId(null) } })
-  }
-
-  const sel = h('select', {
-    key: 'sel', className: 'dsh-lit-select', value: library, title: '按知识库过滤',
-    onChange: function (e) { setLibrary(e.target.value) },
-  }, [
-    h('option', { key: 'all', value: '' }, '全部知识库'),
-  ].concat(LIBRARIES.map(function (lib) {
-    return h('option', { key: lib, value: lib }, lib + (LIB_LABEL[lib] ? ' · ' + LIB_LABEL[lib] : ''))
-  })))
-
-  return h('div', null, [
-    h('div', { key: 'toolbar', className: 'dsh-lit-toolbar' },
-      sel,
-      h('label', { key: 'arch', className: 'dsh-lit-meta', style: { cursor: 'pointer', gap: 4 } },
-        h('input', { type: 'checkbox', checked: includeArchived, onChange: function (e) { setIncludeArchived(e.target.checked) } }),
-        '含归档',
-      ),
-      h('span', { key: 'count', className: 'dsh-lit-count' }, '共 ' + items.length + ' 条' + (includeArchived ? '（含归档）' : '')),
-      error ? h('span', { key: 'e', className: 'dsh-lit-err' }, error) : null,
-    ),
-    h('div', { key: 'list', className: 'dsh-lit-list dsh-lit-scroll', style: { marginTop: 8 } },
-      items.length
-        ? items.map(function (it) {
-          const arch = isArchived(it)
-          return h('button', { key: String(it.id), className: 'dsh-lit-item', onClick: function () { setOpenId(it.id) } },
-            h('div', { className: 'dsh-lit-item-title' },
-              h('span', { className: 'dsh-lit-tt' }, it.concept || '(无概念名)'),
-              libraryChip(it.library, 'lib' + it.id),
-              arch ? h('span', { key: 'arch', className: 'dsh-lit-tag dsh-lit-arch-badge' }, '已归档') : null,
-            ),
-            it.summary ? h('div', { className: 'dsh-lit-summary' }, String(it.summary)) : null,
-            h('div', { className: 'dsh-lit-meta', style: { marginTop: 4 } },
-              it.source_memory_id != null ? h('span', { key: 'sm', className: 'dsh-lit-muted' }, 'memory#' + it.source_memory_id) : null,
-              h('span', { key: 'id', className: 'dsh-lit-muted' }, '#' + it.id),
-              it.updated_at ? h('span', { key: 'up', className: 'dsh-lit-muted' }, '更新 ' + fmtTime(it.updated_at)) : null,
-            ),
-          )
-        })
-        : h('div', { className: 'dsh-lit-empty' }, loading ? '加载中…' : '（该过滤条件下暂无知识点）'),
-    ),
-  ])
+  if (openId != null) return h(KnowledgeDetail, { key: openId, kid: openId, workspaceId: workspaceId, onBack: function () { setOpenId(null) } })
+  const items = resource.data || []
+  return h('div', { className: 'dsh-lit-stack', 'aria-busy': resource.loading },
+    h('div', { className: 'dsh-lit-actions' },
+      h(LibrarySelect, { value: library, onChange: setLibrary }),
+      h(ArchiveCheck, { value: includeArchived, onChange: setIncludeArchived }),
+      h(Button, { icon: 'refresh', title: '刷新知识列表', onClick: resource.reload, disabled: resource.loading }),
+      h('span', { className: 'dsh-lit-count', role: 'status' }, resource.loading ? '加载中…' : items.length + ' 条')),
+    h(Notice, { text: resource.error, error: true, retry: resource.reload }),
+    h('div', { className: 'dsh-lit-list' },
+      items.map(function (item) {
+        return h('button', { key: item.id, type: 'button', className: 'dsh-lit-rowbtn', onClick: function () { setOpenId(item.id) } },
+          h('span', { className: 'dsh-lit-row-icon', 'aria-hidden': true }, '◇'),
+          h('span', { className: 'dsh-lit-content' },
+            h('span', { className: 'dsh-lit-actions' },
+              h('strong', { className: 'dsh-lit-content' }, item.concept || '无概念名'),
+              libraryChip(item.library), isArchived(item) ? archivedChip() : null),
+            item.summary ? h('span', { className: 'dsh-lit-text' }, item.summary) : null,
+            h('span', { className: 'dsh-lit-meta' },
+              h('span', { className: 'dsh-lit-muted' }, '#' + item.id),
+              item.source_memory_id != null ? h('span', { className: 'dsh-lit-muted' }, 'memory #' + item.source_memory_id) : null,
+              item.updated_at ? h('span', { className: 'dsh-lit-muted' }, fmtTime(item.updated_at)) : null)))
+      }),
+      !items.length && !resource.error ? h(Empty, null, resource.loading ? '加载知识…' : '暂无匹配的知识条目') : null))
 }
 
-// ══════════════════════════════════════════════════════════════════
-// 3) 知识图谱视窗（SVG 手绘力导向 + 库下拉过滤 + 节点着色）
-// ══════════════════════════════════════════════════════════════════
 function GraphView(props) {
-  const workspaceId = props.workspaceId
-  const onOpenKnowledge = props.onOpenKnowledge
-  const W = 1000
-  const H = 620
+  const W = 1000, H = 620
   const [library, setLibrary] = React.useState('')
-  const [data, setData] = React.useState(null)
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState('')
+  const [info, setInfo] = React.useState(null)
+  const [detailId, setDetailId] = React.useState(null)
+  const [hover, setHover] = React.useState(null)
   const [tf, setTf] = React.useState({ k: 1, x: 0, y: 0 })
   const [overrides, setOverrides] = React.useState({})
   const [seed, setSeed] = React.useState(0)
-  const [hover, setHover] = React.useState(null)
-  const [info, setInfo] = React.useState(null)
   const svgRef = React.useRef(null)
   const gesture = React.useRef(null)
-
-  async function load() {
-    setLoading(true); setError('')
-    try {
-      const res = await api('/graph' + qs({ workspace_id: workspaceId, library: library || '' }))
-      const g = (res && res.graph) || {}
-      const nodes = Array.isArray(g.nodes) ? g.nodes : []
-      const edges = Array.isArray(g.edges) ? g.edges : []
-      setData({ nodes: nodes, edges: edges })
-      setInfo(null); setOverrides({}); setTf({ k: 1, x: 0, y: 0 })
-    } catch (e) { setError(String((e && e.message) || e)) }
-    finally { setLoading(false) }
-  }
-  React.useEffect(function () { load() }, [library, workspaceId])
-
-  const layout = React.useMemo(function () {
-    if (!data) return {}
-    return buildGraphLayout(data.nodes, data.edges, W, H, seed)
-  }, [data, seed])
-
-  // 非 passive 滚轮缩放
+  const resource = useResource(async function () {
+    const res = await api('/graph' + qs({ workspace_id: props.workspaceId, library: library }))
+    const graph = res && res.graph || {}
+    return { nodes: list(graph.nodes), edges: list(graph.edges) }
+  }, [props.workspaceId, library])
+  const nodes = resource.data ? resource.data.nodes : []
+  const edges = resource.data ? resource.data.edges : []
+  const layout = React.useMemo(function () { return buildGraphLayout(nodes, edges, W, H, seed) }, [resource.data, seed])
   React.useEffect(function () {
-    const el = svgRef.current
-    if (!el) return
-    function onWheel(e) {
-      e.preventDefault()
-      const rect = el.getBoundingClientRect()
-      const scaleX = rect.width / W
-      const scaleY = rect.height / H
-      const factor = e.deltaY < 0 ? 1.16 : 0.86
-      setTf(function (prev) {
-        const k2 = Math.max(0.35, Math.min(6, prev.k * factor))
-        const wx = (e.clientX - rect.left) / scaleX
-        const wy = (e.clientY - rect.top) / scaleY
-        return { k: k2, x: wx - (wx - prev.x) / prev.k * k2, y: wy - (wy - prev.y) / prev.k * k2 }
-      })
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return function () { el.removeEventListener('wheel', onWheel) }
-  }, [])
+    setInfo(null); setHover(null); setOverrides({}); setTf({ k: 1, x: 0, y: 0 }); gesture.current = null
+  }, [resource.data])
 
-  function toWorld(e) {
-    const rect = svgRef.current.getBoundingClientRect()
-    const scaleX = rect.width / W
-    const scaleY = rect.height / H
-    return {
-      x: (e.clientX - rect.left) / scaleX,
-      y: (e.clientY - rect.top) / scaleY,
-    }
-  }
-
-  function posOf(id) {
-    const o = overrides[id]
-    if (o) return o
-    return layout[id]
-  }
-
-  function onPointerDown(e) {
+  // getScreenCTM includes SVG letterboxing, unlike independent width/height ratios.
+  function pointInSvg(event) {
     const svg = svgRef.current
-    if (!svg) return
-    svg.setPointerCapture(e.pointerId)
-    const w = toWorld(e)
-    // 命中的节点？
-    let hit = null
-    if (data) {
-      data.nodes.some(function (n) {
-        const p = posOf(String(n.id))
-        if (!p) return false
-        const dx = w.x - p.x, dy = w.y - p.y
-        if (dx * dx + dy * dy <= (p.r + 6) * (p.r + 6)) { hit = n; return true }
-        return false
-      })
-    }
-    if (hit) {
-      const p = posOf(String(hit.id))
-      gesture.current = {
-        mode: 'node', id: String(hit.id), node: hit,
-        px: e.clientX, py: e.clientY,
-        bx: p.x, by: p.y, k: tf.k, moved: false,
-      }
-    } else {
-      gesture.current = { mode: 'pan', px: e.clientX, py: e.clientY, ox: tf.x, oy: tf.y, k: tf.k, moved: false }
-    }
+    const matrix = svg && svg.getScreenCTM()
+    if (!matrix) return null
+    const point = svg.createSVGPoint()
+    point.x = event.clientX; point.y = event.clientY
+    return point.matrixTransform(matrix.inverse())
   }
 
-  function onPointerMove(e) {
-    const g = gesture.current
-    if (!g) return
+  React.useEffect(function () {
     const svg = svgRef.current
-    const rect = svg.getBoundingClientRect()
-    const dx = e.clientX - g.px
-    const dy = e.clientY - g.py
-    if (Math.abs(dx) + Math.abs(dy) > 3) g.moved = true
-    if (g.mode === 'node') {
-      const dWorldX = dx / (rect.width / W) / g.k
-      const dWorldY = dy / (rect.height / H) / g.k
-      setOverrides(function (prev) {
-        const next = Object.assign({}, prev)
-        next[g.id] = { id: g.id, r: (layout[g.id] && layout[g.id].r) || 10, x: g.bx + dWorldX, y: g.by + dWorldY }
-        return next
+    if (!svg || detailId != null) return
+    function wheel(event) {
+      event.preventDefault()
+      event.stopPropagation()
+      const point = pointInSvg(event)
+      if (!point) return
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? H : 1)
+      setTf(function (previous) {
+        const k = Math.max(0.35, Math.min(6, previous.k * Math.exp(-delta * 0.0015)))
+        return { k: k, x: point.x - (point.x - previous.x) * k / previous.k, y: point.y - (point.y - previous.y) * k / previous.k }
       })
-    } else {
-      setTf(function (prev) { return { k: prev.k, x: g.ox + dx / (rect.width / W), y: g.oy + dy / (rect.height / H) } })
     }
+    svg.addEventListener('wheel', wheel, { passive: false })
+    return function () { svg.removeEventListener('wheel', wheel) }
+  }, [detailId])
+
+  function pos(id) { return overrides[String(id)] || layout[String(id)] }
+
+  function start(event, node) {
+    if (event.button !== 0 || gesture.current) return
+    const point = pointInSvg(event)
+    if (!point) return
+    event.preventDefault(); event.stopPropagation()
+    const position = node ? pos(node.id) : null
+    gesture.current = {
+      pointerId: event.pointerId, node: node || null, start: point, clientX: event.clientX, clientY: event.clientY,
+      x: position ? position.x : tf.x, y: position ? position.y : tf.y, k: tf.k, moved: false,
+    }
+    svgRef.current.setPointerCapture(event.pointerId)
   }
 
-  function onPointerUp(e) {
-    const g = gesture.current
-    if (g && g.mode === 'node' && !g.moved && g.node) setInfo(g.node)
+  function move(event) {
+    const drag = gesture.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const point = pointInSvg(event)
+    if (!point) return
+    if (Math.hypot(event.clientX - drag.clientX, event.clientY - drag.clientY) > 3) drag.moved = true
+    if (!drag.moved) return
+    const dx = point.x - drag.start.x, dy = point.y - drag.start.y
+    if (drag.node) {
+      setOverrides(function (previous) {
+        return Object.assign({}, previous, { [String(drag.node.id)]: {
+          id: String(drag.node.id), r: layout[String(drag.node.id)].r, x: drag.x + dx / drag.k, y: drag.y + dy / drag.k,
+        } })
+      })
+    } else setTf({ k: drag.k, x: drag.x + dx, y: drag.y + dy })
+  }
+
+  function finish(event, cancelled) {
+    const drag = gesture.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    if (!cancelled && !drag.moved) setInfo(drag.node)
     gesture.current = null
-    try { svgRef.current.releasePointerCapture(e.pointerId) } catch (err) { /* ignore */ }
+    const svg = svgRef.current
+    if (svg && svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId)
   }
 
-  const nodes = (data && data.nodes) || []
-  const edges = (data && data.edges) || []
-  const libCounts = {}
-  nodes.forEach(function (n) { const k = n.library || 'unknown'; libCounts[k] = (libCounts[k] || 0) + 1 })
-
-  const edgeEls = edges.map(function (e, i) {
-    const a = posOf(String(e.source))
-    const b = posOf(String(e.target))
-    if (!a || !b) return null
-    return h('g', { key: 'e' + i },
-      h('title', null, (e.source_concept || String(e.source)) + ' —' + (e.relation || '关联') + '→ ' + (e.target_concept || String(e.target))),
-      h('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y, className: 'dsh-lit-gedge', strokeWidth: 1.4 }),
-    )
-  })
-
-  const nodeEls = nodes.map(function (n) {
-    const p = posOf(String(n.id))
-    if (!p) return null
-    const col = libraryColor(n.library)
-    const dim = hover != null && hover !== String(n.id) ? 0.4 : 1
-    const label = String(n.concept || n.id)
-    return h('g', {
-      key: 'n' + n.id,
-      className: 'dsh-lit-gnode',
-      opacity: dim,
-      onPointerDown: onPointerDown,
-      onPointerEnter: function () { setHover(String(n.id)) },
-      onPointerLeave: function () { setHover(null) },
-    },
-      h('title', null, label + (n.library ? ' [' + n.library + ']' : '')),
-      h('circle', { cx: p.x, cy: p.y, r: p.r || 10, fill: col, stroke: 'rgba(0,0,0,.35)', strokeWidth: hover === String(n.id) ? 2 : 1 }),
-      h('text', { x: p.x, y: p.y + (p.r || 10) + 12, className: 'dsh-lit-glabel', textAnchor: 'middle' }, clipLabel(label, 26)),
-    )
-  })
-
-  function legendRows() {
-    return LIBRARIES.concat('unknown').map(function (lib) {
-      const c = libCounts[lib]
-      if (!c) return null
-      return h('span', { key: lib, className: 'dsh-lit-key' },
-        h('span', { className: 'dsh-lit-dot', style: { background: libraryColor(lib) } }),
-        (LIB_LABEL[lib] || lib) + ' ' + c)
-    }).filter(Boolean)
+  function zoom(factor) {
+    setTf(function (previous) {
+      const k = Math.max(0.35, Math.min(6, previous.k * factor))
+      return { k: k, x: W / 2 - (W / 2 - previous.x) * k / previous.k, y: H / 2 - (H / 2 - previous.y) * k / previous.k }
+    })
   }
 
-  const adj = {}
-  edges.forEach(function (e) {
-    adj[String(e.source)] = (adj[String(e.source)] || 0) + 1
-    adj[String(e.target)] = (adj[String(e.target)] || 0) + 1
+  function reset() { setTf({ k: 1, x: 0, y: 0 }); setOverrides({}); setSeed(function (value) { return value + 1 }) }
+  const neighbors = new Set(hover == null ? [] : [hover])
+  const degree = {}
+  edges.forEach(function (edge) {
+    const source = String(edge.source), target = String(edge.target)
+    degree[source] = (degree[source] || 0) + 1; degree[target] = (degree[target] || 0) + 1
+    if (source === hover) neighbors.add(target)
+    if (target === hover) neighbors.add(source)
   })
+  const counts = {}
+  nodes.forEach(function (node) { const library = LIBRARIES.indexOf(node.library) >= 0 ? node.library : 'unknown'; counts[library] = (counts[library] || 0) + 1 })
 
-  const infoPanel = info
-    ? h('div', { className: 'dsh-lit-side' },
-      h('div', { className: 'dsh-lit-card', style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-        h('div', { className: 'dsh-lit-muted' }, '图谱节点 #' + info.id),
-        h('div', { className: 'dsh-lit-item-title' }, info.concept || '(无概念名)'),
-        libraryChip(info.library, 'info'),
-        h('div', { className: 'dsh-lit-kv' },
-          h('span', { className: 'dsh-lit-k' }, '连接边数'),
-          h('span', { className: 'dsh-lit-v' }, String(adj[String(info.id)] || 0)),
-        ),
-        onOpenKnowledge
-          ? h('button', { className: 'dsh-lit-btn dsh-lit-btn-primary', onClick: function () { onOpenKnowledge(Number(info.id)) } }, '打开知识条目详情 →')
-          : null,
-        h('button', { className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: function () { setInfo(null) } }, '关闭'),
-      ))
-    : null
+  if (detailId != null) return h(KnowledgeDetail, { key: detailId, kid: detailId, workspaceId: props.workspaceId, backLabel: '返回图谱', onBack: function () { setDetailId(null) } })
 
-  return h('div', null, [
-    h('div', { key: 'toolbar', className: 'dsh-lit-toolbar' },
-      h('label', { className: 'dsh-lit-meta', style: { gap: 4 } }, '知识库:'),
-      h('select', { className: 'dsh-lit-select', value: library, onChange: function (e) { setLibrary(e.target.value) } },
-        [h('option', { key: 'all', value: '' }, '全部（无过滤）')].concat(LIBRARIES.map(function (lib) {
-          return h('option', { key: lib, value: lib }, lib + (LIB_LABEL[lib] ? ' · ' + LIB_LABEL[lib] : ''))
-        }))),
-      h('button', { key: 're', className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: load, disabled: loading }, '重新加载'),
-      h('button', { key: 'rz', className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: function () { setTf({ k: 1, x: 0, y: 0 }); setOverrides({}); setSeed(seed + 1) } }, '重排 / 复位'),
-      h('span', { key: 'count', className: 'dsh-lit-count' }, '节点 ' + nodes.length + ' · 边 ' + edges.length),
-      error ? h('span', { key: 'e', className: 'dsh-lit-err' }, error) : null,
-    ),
-    h('div', { key: 'box', className: 'dsh-lit-card dsh-lit-graphbox', style: { marginTop: 8, padding: 10 } },
-      h('div', { className: 'dsh-lit-svg-wrap' },
-        h('div', { className: 'dsh-lit-abs' },
-          h('svg', {
-            ref: svgRef, className: 'dsh-lit-svg' + (gesture.current ? ' dsh-lit-dragging' : ''),
-            viewBox: '0 0 ' + W + ' ' + H,
-            onPointerDown: onPointerDown,
-            onPointerMove: onPointerMove,
-            onPointerUp: onPointerUp,
-            onPointerCancel: function () { gesture.current = null },
-          },
-            h('g', { transform: 'translate(' + tf.x + ',' + tf.y + ') scale(' + tf.k + ')' },
-              h('rect', { x: -2000, y: -2000, width: 8000, height: 8000, fill: 'transparent' }),
-              edgeEls,
-              nodeEls,
-            ),
-          ),
-          loading ? h('div', { className: 'dsh-lit-loading' }, '图谱加载中…') : null,
-        ),
-        nodes.length === 0 && !loading
-          ? h('div', { key: 'empty', className: 'dsh-lit-empty' }, '（当前过滤下暂无图谱节点' + (edges.length ? '，但有 ' + edges.length + ' 条悬空边' : '') + '。可先切换知识库或在知识视窗中沉淀知识点）')
-          : null,
-        edges.length === 0 && nodes.length > 0
-          ? h('div', { className: 'dsh-lit-hint', style: { marginTop: 4 } }, '当前尚无关系边：节点已按知识库着色，建立 knowledge relations 后连线会出现。')
-          : null,
-        h('div', { className: 'dsh-lit-legend' },
-          legendRows(),
-          h('span', { className: 'dsh-lit-muted' }, '拖拽节点调整 · 滚轮缩放 · 拖空白平移 · 悬停高亮'),
-        ),
-      ),
-      infoPanel,
-    ),
-  ])
+  return h('div', { className: 'dsh-lit-stack', 'aria-busy': resource.loading },
+    h('div', { className: 'dsh-lit-actions' },
+      h(LibrarySelect, { value: library, onChange: setLibrary }),
+      h(Button, { icon: 'refresh', title: '刷新图谱', onClick: resource.reload, disabled: resource.loading }),
+      h(Button, { icon: 'reset', title: '重排并重置视图', onClick: reset, disabled: !nodes.length }),
+      h(Button, { icon: 'zoomOut', title: '缩小', onClick: function () { zoom(1 / 1.25) }, disabled: tf.k <= 0.35 }),
+      h('span', { className: 'dsh-lit-mini', style: { minWidth: 44, justifyContent: 'center' } }, Math.round(tf.k * 100) + '%'),
+      h(Button, { icon: 'zoomIn', title: '放大', onClick: function () { zoom(1.25) }, disabled: tf.k >= 6 }),
+      h('span', { className: 'dsh-lit-count' }, nodes.length + ' 节点 · ' + edges.length + ' 关系')),
+    h(Notice, { text: resource.error, error: true, retry: resource.reload }),
+    h('div', { className: 'dsh-lit-graph-legend', 'aria-label': '知识库图例' },
+      LIBRARIES.concat('unknown').filter(function (library) { return library !== 'unknown' || counts.unknown }).map(function (library) {
+        return h('span', { key: library, className: 'dsh-lit-graph-key' },
+          h('i', { className: 'dsh-lit-graph-dot', style: { background: libraryColor(library) }, 'aria-hidden': true }),
+          (LIB_LABEL[library] || '未分类') + ' ' + (counts[library] || 0))
+      })),
+    h('div', { className: 'dsh-lit-graphbox' + (info ? ' dsh-lit-graphbox-selected' : '') },
+      h('div', { className: 'dsh-lit-graph-stage' },
+        h('svg', {
+          ref: svgRef, className: 'dsh-lit-graph-svg', viewBox: '0 0 ' + W + ' ' + H, role: 'group', 'aria-label': '知识概念关系图',
+          onPointerDown: function (event) { start(event, null) }, onPointerMove: move,
+          onPointerUp: function (event) { finish(event, false) }, onPointerCancel: function (event) { finish(event, true) },
+          onLostPointerCapture: function () { gesture.current = null },
+        }, h('g', { transform: 'translate(' + tf.x + ',' + tf.y + ') scale(' + tf.k + ')' },
+          edges.map(function (edge, index) {
+            const a = pos(edge.source), b = pos(edge.target)
+            if (!a || !b) return null
+            const hot = hover == null || String(edge.source) === hover || String(edge.target) === hover
+            return h('line', { key: 'e' + index, className: 'dsh-lit-graph-edge', x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+              opacity: hot ? 1 : 0.15, strokeWidth: hover != null && hot ? 2.5 : 1.4 },
+              h('title', null, (edge.source_concept || edge.source) + ' → ' + (edge.relation || '关联') + ' → ' + (edge.target_concept || edge.target)))
+          }),
+          nodes.map(function (node) {
+            const point = pos(node.id)
+            if (!point) return null
+            const selected = info && String(info.id) === String(node.id)
+            const hot = hover === String(node.id) || selected
+            return h('g', {
+              key: 'n' + node.id, className: 'dsh-lit-graph-node', 'data-node-id': String(node.id),
+              tabIndex: 0, role: 'button', 'aria-label': node.concept || String(node.id), 'aria-pressed': !!selected,
+              opacity: hover != null && !neighbors.has(String(node.id)) ? 0.25 : 1,
+              onPointerDown: function (event) { start(event, node) },
+              onPointerEnter: function () { setHover(String(node.id)) }, onPointerLeave: function () { setHover(null) },
+              onFocus: function () { setHover(String(node.id)) }, onBlur: function () { setHover(null) },
+              onKeyDown: function (event) {
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setInfo(node) }
+              },
+            },
+              h('title', null, (node.concept || node.id) + ' · ' + (LIB_LABEL[node.library] || '未分类') + ' · ' + (degree[String(node.id)] || 0) + ' 关系'),
+              h('circle', { cx: point.x, cy: point.y, r: point.r, fill: libraryColor(node.library),
+                stroke: hot ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-bg-layer-1)', strokeWidth: hot ? 2.5 : 1 }),
+              h('text', { x: point.x, y: point.y + point.r + 14, className: 'dsh-lit-graph-label', textAnchor: 'middle' }, short(node.concept || node.id, 22)))
+          }))),
+        resource.loading || !nodes.length ? h('div', { className: 'dsh-lit-graph-overlay', role: 'status' },
+          resource.loading ? '加载图谱…' : resource.error ? '图谱加载失败' : '暂无匹配的图谱节点') : null),
+      info ? h('aside', { className: 'dsh-lit-side', 'aria-label': '节点详情' },
+        h('div', { className: 'dsh-lit-actions' },
+          h('span', { className: 'dsh-lit-title dsh-lit-content' }, '知识 #' + info.id),
+          h(Button, { icon: 'close', title: '关闭节点详情', onClick: function () { setInfo(null) } })),
+        h('h2', { className: 'dsh-lit-heading' }, info.concept || '无概念名'),
+        h('div', null, libraryChip(info.library)),
+        info.summary ? h('p', { className: 'dsh-lit-text' }, info.summary) : null,
+        h(KV, { rows: [['关联关系', degree[String(info.id)] || 0]] }),
+        h(Button, { icon: 'open', className: 'dsh-lit-btn-primary', onClick: function () { setDetailId(info.id) } }, '知识详情')) : null))
 }
 
-// ══════════════════════════════════════════════════════════════════
-// 4) 状况窗口（记忆库 / 知识 / 图谱 / 配置 状态卡）
-// ══════════════════════════════════════════════════════════════════
 function StatusView(props) {
-  const workspaceId = props.workspaceId
-  const [st, setSt] = React.useState(null)
-  const [busy, setBusy] = React.useState(false)
-  const [error, setError] = React.useState('')
-
-  async function load() {
-    setBusy(true); setError('')
-    const ws = workspaceId || ''
-    const res = {}
-    const grab = async function (key, path) {
-      try { res[key] = await api(path) } catch (e) { res[key + 'Err'] = String((e && e.message) || e) }
+  const resource = useResource(async function () {
+    const ws = props.workspaceId
+    const sources = {
+      kb: '/kb/browse', count: '/knowledge-count' + qs({ workspace_id: ws }),
+      active: '/knowledge-browse' + qs({ workspace_id: ws, archived: false, k: 1000 }),
+      archived: '/knowledge-browse' + qs({ workspace_id: ws, archived: true, k: 1000 }),
+      graph: '/graph' + qs({ workspace_id: ws }), config: '/config',
     }
-    await Promise.all([
-      grab('kb', '/kb/browse'),
-      grab('count', '/knowledge-count' + qs({ workspace_id: ws })),
-      grab('active', '/knowledge-browse' + qs({ workspace_id: ws, archived: false, k: 1000 })),
-      grab('arch', '/knowledge-browse' + qs({ workspace_id: ws, archived: true, k: 1000 })),
-      grab('graph', '/graph' + qs({ workspace_id: ws })),
-      grab('cfg', '/config'),
-    ])
-    setSt(res)
-    setBusy(false)
-    const errs = ['kbErr', 'countErr', 'activeErr', 'archErr', 'graphErr', 'cfgErr']
-      .filter(function (k) { return res[k] })
-      .map(function (k) { return k.replace('Err', '') + ': ' + res[k] })
-    if (errs.length) setError('部分数据源不可用：' + errs.join('；'))
+    const result = {}
+    await Promise.all(Object.keys(sources).map(async function (key) {
+      try { result[key] = { value: await api(sources[key]) } }
+      catch (error) { result[key] = { error: message(error) } }
+    }))
+    return result
+  }, [props.workspaceId])
+  const data = resource.data
+  function card(title, value, lines, error) {
+    return h('article', { className: 'dsh-lit-box dsh-lit-stat', key: title },
+      h('h3', { className: 'dsh-lit-title' }, title),
+      h('div', { className: 'dsh-lit-stat-big' }, resource.loading ? '…' : error ? '—' : value),
+      h('div', { className: 'dsh-lit-stat-lines' }, lines.map(function (line, index) { return h('div', { key: index }, line) })),
+      h(Notice, { text: error, error: true, retry: resource.reload }))
   }
-  React.useEffect(function () { load() }, [workspaceId])
-
-  function card(label, big, subLines, color) {
-    return h('div', { key: label, className: 'dsh-lit-stat' },
-      h('div', { className: 'dsh-lit-stat-label' }, label),
-      h('div', { className: 'dsh-lit-stat-big', style: color ? { color: color } : {} }, big),
-      subLines.length ? h('div', { className: 'dsh-lit-stat-sub' }, subLines.map(function (l, i) {
-        return h('div', { key: 'l' + i }, l)
-      })) : null,
-    )
-  }
-
   const cards = []
-  if (!st && busy) return h('div', null, '加载状况…')
-  if (!st) return h('div', null, error || '加载失败')
-  const kbLibs = (st.kb && st.kb.libraries) || {}
-  const kbIds = Object.keys(kbLibs)
-  const kbTotal = kbIds.reduce(function (acc, k) { return acc + Number((kbLibs[k] && kbLibs[k].total) || 0) }, 0)
-  const kbArch = kbIds.reduce(function (acc, k) { return acc + Number((kbLibs[k] && kbLibs[k].archived) || 0) }, 0)
-  const kbSub = [
-    kbIds.length ? kbIds.map(function (k) { return k + ' ' + ((kbLibs[k] && kbLibs[k].total) || 0) }).join(' · ') : '（deepmemory 上游无库数据）',
-    kbArch ? '其中归档 ' + kbArch + ' 条' : '',
-    kbIds.length ? '库: ' + kbIds.join(' / ') : '',
-  ].filter(Boolean)
-  // runtime 库 topics 展示最热主题
-  const hotLib = LIBRARIES.map(function (l) { return { l: l, t: kbLibs[l] && kbLibs[l].topics } })
-    .filter(function (x) { return x.t })
-    .sort(function (a, b) { return Object.keys(b.t).length - Object.keys(a.t).length })[0]
-  if (hotLib) {
-    const topics = Object.keys(hotLib.t)
-      .filter(function (k) { return String(k) !== '0' && String(k) !== '' })
-      .map(function (k) { return { name: k, n: Number(hotLib.t[k]) || 0 } })
-      .sort(function (a, b) { return b.n - a.n })
-      .slice(0, 4)
-    if (topics.length) kbSub.push(hotLib.l + ' 主题: ' + topics.map(function (t) { return t.name + '×' + t.n }).join('、'))
-  }
-  cards.push(card('deepmemory 记忆库（5 库目录）', kbTotal ? String(kbTotal) + ' 条' : '—', kbSub, '#60a5fa'))
-
-  const kCount = st.count && st.count.count != null ? Number(st.count.count) : null
-  const activeItems = (st.active && st.active.items) || []
-  const archItems = (st.arch && st.arch.items) || []
-  const perLib = {}
-  activeItems.forEach(function (it) { const l = it.library || 'unknown'; perLib[l] = (perLib[l] || 0) + 1 })
-  const knSub = [
-    LIBRARIES.map(function (l) { return l + ' ' + (perLib[l] || 0) }).join(' · '),
-    archItems.length ? '另归档 ' + archItems.length + ' 条' : '无归档条目',
-    st.activeErr || st.archErr ? '(分库数据不可用)' : '',
-  ].filter(Boolean)
-  cards.push(card('本库知识（literature 知识点）', kCount != null ? kCount + ' 条' : '—', knSub, '#34d399'))
-
-  const g = (st.graph && st.graph.graph) || {}
-  const gnodes = Array.isArray(g.nodes) ? g.nodes : []
-  const gedges = Array.isArray(g.edges) ? g.edges : []
-  const gLib = {}
-  gnodes.forEach(function (n) { const l = n.library || 'unknown'; gLib[l] = (gLib[l] || 0) + 1 })
-  cards.push(card('知识图谱（概念网络）', String(gnodes.length) + ' 节点', [
-    '关系边 ' + gedges.length + ' 条',
-    LIBRARIES.map(function (l) { return l + ' ' + (gLib[l] || 0) }).join(' · '),
-  ], '#a78bfa'))
-
-  const cfg = (st.cfg && st.cfg.config) || {}
-  const cfgKeys = Object.keys(cfg)
-  const cfgLines = cfgKeys.slice(0, 7).map(function (k) {
-    const v = cfg[k]
-    const sv = typeof v === 'string' ? v : JSON.stringify(v)
-    return k + ': ' + short(sv, 46)
-  })
-  cards.push(card('配置摘要（/config）', String(cfgKeys.length) + ' 项', cfgKeys.length
-    ? cfgLines.concat(cfgKeys.length > 7 ? ['… 等 ' + cfgKeys.length + ' 项'] : [])
-    : ['（未配置任何项，可到 设置 → 插件配置 卡片维护）'], '#f59e0b'))
-
-  return h('div', null, [
-    h('div', { key: 'tool', className: 'dsh-lit-toolbar' },
-      h('span', { className: 'dsh-lit-meta', style: { fontWeight: 600 } }, '状况窗口'),
-      h('span', { className: 'dsh-lit-ws' }, 'workspace: ' + (workspaceId || '—')),
-      h('button', { key: 'r', className: 'dsh-lit-btn dsh-lit-btn-mini', onClick: load, disabled: busy }, busy ? '刷新中…' : '刷新'),
-      error ? h('span', { key: 'e', className: 'dsh-lit-err' }, error) : null,
-    ),
-    h('div', { key: 'cards', className: 'dsh-lit-stats', style: { marginTop: 8 } }, cards),
-    h('div', { key: 'note', className: 'dsh-lit-hint', style: { marginTop: 8 } },
-      '本窗口为只读状态摘要：deepmemory 记忆库计数来自 /kb/browse，本库知识与图谱计数来自 /knowledge-* 与 /graph，均按当前 workspace 统计。'),
-  ])
+  const kb = data && data.kb.value && data.kb.value.libraries || {}
+  const kbIds = Object.keys(kb)
+  const kbTotal = kbIds.reduce(function (sum, key) { return sum + Number(kb[key].total || 0) }, 0)
+  const kbArchived = kbIds.reduce(function (sum, key) { return sum + Number(kb[key].archived || 0) }, 0)
+  cards.push(card('deepmemory 记忆库', kbTotal + ' 条', data ? [
+    '知识库 ' + kbIds.length + ' 个 · 归档 ' + kbArchived + ' 条',
+    kbIds.map(function (key) { return key + ' ' + Number(kb[key].total || 0) }).join(' · ') || '暂无库数据',
+  ] : [], data && data.kb.error))
+  const active = list(data && data.active.value && data.active.value.items)
+  const archived = list(data && data.archived.value && data.archived.value.items)
+  const perLibrary = {}
+  active.forEach(function (item) { perLibrary[item.library] = (perLibrary[item.library] || 0) + 1 })
+  const count = data && data.count.value && data.count.value.count
+  cards.push(card('本库知识', count == null ? '—' : count + ' 条', data ? [
+    data.active.error ? '分库计数不可用' : (active.length >= 1000 ? '已载入：' : '') + LIBRARIES.map(function (library) { return library + ' ' + (perLibrary[library] || 0) }).join(' · '),
+    data.archived.error ? '归档计数不可用' : '另归档 ' + (archived.length >= 1000 ? '至少 ' : '') + archived.length + ' 条',
+  ] : [], data && [data.count.error, data.active.error, data.archived.error].filter(Boolean).join('；')))
+  const graph = data && data.graph.value && data.graph.value.graph || {}
+  cards.push(card('图谱规模', list(graph.nodes).length + ' 节点', data ? [
+    list(graph.edges).length + ' 条关系',
+    LIBRARIES.map(function (library) { return library + ' ' + list(graph.nodes).filter(function (node) { return node.library === library }).length }).join(' · '),
+  ] : [], data && data.graph.error))
+  const config = data && data.config.value && data.config.value.config || {}
+  const keys = Object.keys(config)
+  cards.push(card('配置摘要', keys.length + ' 项', data ? keys.length ? keys.slice(0, 7).map(function (key) {
+    const value = typeof config[key] === 'string' ? config[key] : JSON.stringify(config[key])
+    return h('span', { title: key + ': ' + value }, key + ': ' + short(value, 80))
+  }).concat(keys.length > 7 ? ['其余 ' + (keys.length - 7) + ' 项'] : []) : ['暂无自定义配置'] : [], data && data.config.error))
+  return h('div', { className: 'dsh-lit-stack', 'aria-busy': resource.loading },
+    h('div', { className: 'dsh-lit-actions' },
+      h('h2', { className: 'dsh-lit-title dsh-lit-content' }, '状况'),
+      h(Button, { icon: 'refresh', title: '刷新状况', onClick: resource.reload, disabled: resource.loading })),
+    h(Notice, { text: resource.error, error: true, retry: resource.reload }),
+    h('div', { className: 'dsh-lit-stat-grid' }, cards))
 }
 
-// ══════════════════════════════════════════════════════════════════
-// conversation 面板主组件（四子视图切换）
-// ══════════════════════════════════════════════════════════════════
+const TABS = [
+  { id: 'docs', label: '📄 文档', component: DocumentsView },
+  { id: 'knowledge', label: '🧠 知识', component: KnowledgeView },
+  { id: 'graph', label: '🕸 图谱', component: GraphView },
+  { id: 'status', label: '📊 状况', component: StatusView },
+]
+
+function PanelBody(props) {
+  const [view, setView] = React.useState('docs')
+  const [visited, setVisited] = React.useState({ docs: true })
+  const [workspace, setWorkspace] = React.useState(props.workspaceId || DEFAULT_WORKSPACE)
+  const [wsOptions, setWsOptions] = React.useState([])
+  const tabRefs = React.useRef([])
+  const panelId = React.useId()
+  React.useEffect(function () {
+    api('/workspaces').then(function (data) {
+      setWsOptions((data && data.workspaces) || [])
+    }).catch(function () { /* 拉取失败仅影响下拉枚举，不影响主面板 */ })
+  }, [])
+  function select(id) {
+    setView(id)
+    setVisited(function (previous) { return Object.assign({}, previous, { [id]: true }) })
+  }
+  function switchWorkspace(value) {
+    const next = value || DEFAULT_WORKSPACE
+    setWorkspace(next)
+    setVisited(function (previous) {
+      const fresh = Object.assign({}, previous)
+      Object.keys(fresh).forEach(function (k) { fresh[k] = false })
+      fresh.docs = true
+      return fresh
+    })
+    setView('docs')
+  }
+  function tabKey(event, index) {
+    let next = index
+    if (event.key === 'ArrowRight') next = (index + 1) % TABS.length
+    else if (event.key === 'ArrowLeft') next = (index + TABS.length - 1) % TABS.length
+    else if (event.key === 'Home') next = 0
+    else if (event.key === 'End') next = TABS.length - 1
+    else return
+    event.preventDefault()
+    select(TABS[next].id)
+    tabRefs.current[next].focus()
+  }
+  return h('div', { className: 'dsh-lit-panel', 'data-dsh-style': 'deepmemory-tokens-v2' },
+    h('header', { className: 'dsh-lit-topbar' },
+      h('h1', { className: 'dsh-lit-brand' }, '📚 literature 文献知识库'),
+      h('select', {
+        className: 'dsh-lit-select', 'aria-label': '选择工作区',
+        value: workspace, onChange: function (event) { switchWorkspace(event.target.value) },
+      }, [
+        h('option', { key: 'cur', value: workspace }, workspace),
+        wsOptions.filter(function (w) { return w.workspace_id !== workspace }).map(function (w) {
+          return h('option', { key: w.workspace_id, value: w.workspace_id }, w.workspace_id + (w.knowledge ? ' (' + w.knowledge + ')' : ' (0)'))
+        }),
+      ]),
+      h('span', { className: 'dsh-lit-ws', title: '当前会话工作区' }, '会话: ' + props.workspaceId)),
+    h('div', { className: 'dsh-lit-tabs', role: 'tablist', 'aria-label': '文献知识库视图' },
+      TABS.map(function (tab, index) {
+        return h('button', {
+          key: tab.id, type: 'button', className: 'dsh-lit-tab', role: 'tab',
+          id: panelId + '-tab-' + tab.id, 'aria-controls': panelId + '-view-' + tab.id,
+          'aria-selected': view === tab.id, tabIndex: view === tab.id ? 0 : -1,
+          ref: function (element) { tabRefs.current[index] = element },
+          onKeyDown: function (event) { tabKey(event, index) }, onClick: function () { select(tab.id) },
+        }, tab.label)
+      })),
+    TABS.map(function (tab) {
+      return h('div', {
+        key: tab.id, id: panelId + '-view-' + tab.id, className: 'dsh-lit-view', role: 'tabpanel',
+        'aria-labelledby': panelId + '-tab-' + tab.id, hidden: view !== tab.id,
+      }, visited[tab.id] ? h(tab.component, { workspaceId: workspace }) : null)
+    }))
+}
+
 function LiteraturePanel(props) {
   const workspaceId = resolveWorkspaceId(props)
-  const [view, setView] = React.useState('docs')
-  const [focusId, setFocusId] = React.useState(null)
-
-  function openKnowledge(id) { setFocusId(id); setView('knowledge') }
-
-  const tabs = [
-    { id: 'docs', label: '📄 文档' },
-    { id: 'knowledge', label: '🧠 知识' },
-    { id: 'graph', label: '🕸 图谱' },
-    { id: 'status', label: '📊 状况' },
-  ]
-  const content = view === 'docs'
-    ? h(DocumentsView, { key: 'docs', workspaceId: workspaceId })
-    : view === 'knowledge'
-      ? h(KnowledgeView, { key: 'knowledge', workspaceId: workspaceId, focusId: focusId, onFocusConsumed: function () { setFocusId(null) } })
-      : view === 'graph'
-        ? h(GraphView, { key: 'graph', workspaceId: workspaceId, onOpenKnowledge: openKnowledge })
-        : h(StatusView, { key: 'status', workspaceId: workspaceId })
-
-  return h('div', { className: 'dsh-lit-panel' },
-    h('div', { className: 'dsh-lit-topbar' },
-      h('span', { className: 'dsh-lit-brand' }, '📚 literature 文献知识库'),
-      h('span', { className: 'dsh-lit-ws' }, workspaceId),
-      h('div', { className: 'dsh-lit-tabs' },
-        tabs.map(function (t) {
-          return h('button', {
-            key: t.id, className: 'dsh-lit-tab' + (view === t.id ? ' dsh-lit-tab-on' : ''),
-            onClick: function () { setView(t.id) },
-          }, t.label)
-        }),
-      ),
-    ),
-    h('div', { style: { display: 'flex', flexDirection: 'column', minWidth: 0 } }, content),
-  )
+  return h(PanelBody, { key: workspaceId, workspaceId: workspaceId })
 }
 
-// ══════════════════════════════════════════════════════════════════
-// 插件配置卡片（设置 → 插件 → 插件配置页）—— 保持既有 schema 驱动实现
-// ══════════════════════════════════════════════════════════════════
 function ConfigView() {
-  const [schema, setSchema] = React.useState(null)
   const [values, setValues] = React.useState({})
-  const [msg, setMsg] = React.useState('')
-
-  React.useEffect(function () {
-    Promise.all([api('/config-schema'), api('/config')]).then(function (res) {
-      const s = res[0], c = res[1]
-      if (s && s.schema) setSchema(s.schema)
-      if (c && c.config) setValues(c.config)
-    }).catch(function (e) { setMsg('加载配置失败: ' + String((e && e.message) || e)) })
+  const [busy, setBusy] = React.useState(false)
+  const [notice, setNotice] = React.useState(null)
+  const resource = useResource(async function () {
+    const results = await Promise.all([api('/config-schema'), api('/config')])
+    if (!results[0] || !results[0].schema) throw new Error('配置结构不可用')
+    return { schema: results[0].schema, values: results[1] && results[1].config || {} }
   }, [])
-
-  if (!schema) return h('div', null, '加载配置…')
-
-  const groups = Object.keys(schema)
-  const rows = []
-  groups.forEach(function (gname) {
-    const g = schema[gname]
-    rows.push(h('h4', { key: 'h' + gname, style: { margin: '12px 0 4px', fontSize: 13 } }, (g && g.description) || gname))
-    const items = (g && g.items) || {}
-    Object.keys(items).forEach(function (key) {
-      const item = items[key]
-      const full = gname + '.' + key
-      const val = values[full] !== undefined ? values[full] : item.default
-      rows.push(h('div', { key: full, style: { marginBottom: 8 } }, [
-        h('label', { key: 'l', style: { display: 'block', fontSize: 12, fontWeight: 600 } },
-          (item && (item.description || key)) || key + (item && item.readonly ? '（只读）' : '')),
-        h('input', {
-          key: 'i', value: val === undefined || val === null ? '' : String(val),
-          readOnly: !!(item && item.readonly),
-          style: { width: '100%', padding: '4px 8px', border: '1px solid #ccc', borderRadius: 4, background: 'transparent', color: 'inherit' },
-          onChange: function (e) {
-            let next = e.target.value
-            if (item && item.type === 'number') next = Number(next)
-            setValues(function (v) { return Object.assign({}, v, { [full]: next }) })
-          },
-        }),
-        item && item.hint ? h('div', { key: 'hint', style: { fontSize: 11, color: '#888' } }, String(item.hint)) : null,
-      ]))
-    })
-  })
-
-  async function save() {
-    try {
-      await api('/config', { method: 'POST', body: values })
-      setMsg('已保存')
-    } catch (e) { setMsg('保存失败: ' + String((e && e.message) || e)) }
+  const schema = resource.data && resource.data.schema
+  const formId = React.useId()
+  React.useEffect(function () { if (resource.data) setValues(resource.data.values) }, [resource.data])
+  function setValue(key, value) { setValues(function (previous) { return Object.assign({}, previous, { [key]: value }) }) }
+  function valueFor(key, spec) { return values[key] === undefined ? spec.default : values[key] }
+  function numeric(spec) { return ['number', 'integer', 'int', 'float'].indexOf(spec.type) >= 0 }
+  function field(key, spec) {
+    const value = valueFor(key, spec)
+    const base = { id: formId + key, disabled: busy || !!spec.readonly }
+    if (spec.type === 'boolean' || spec.type === 'bool') return h('input', Object.assign({}, base, {
+      type: 'checkbox', checked: value === true || value === 1 || value === 'true',
+      onChange: function (event) { setValue(key, event.target.checked) },
+    }))
+    if (Array.isArray(spec.options)) return h('select', Object.assign({}, base, {
+      className: 'dsh-lit-select', value: value == null ? '' : String(value),
+      onChange: function (event) { setValue(key, numeric(spec) ? Number(event.target.value) : event.target.value) },
+    }), spec.options.map(function (option) { return h('option', { key: String(option), value: String(option) }, String(option)) }))
+    if (['text', 'array', 'list'].indexOf(spec.type) >= 0) return h('textarea', Object.assign({}, base, {
+      className: 'dsh-lit-input', rows: 3,
+      value: Array.isArray(value) ? value.join('\n') : value == null ? '' : String(value),
+      onChange: function (event) { setValue(key, spec.type === 'text' ? event.target.value : event.target.value.split(/[,，\n]/).map(function (item) { return item.trim() }).filter(Boolean)) },
+    }))
+    return h('input', Object.assign({}, base, {
+      className: 'dsh-lit-input', type: numeric(spec) ? 'number' : 'text',
+      step: spec.type === 'number' || spec.type === 'float' ? 'any' : undefined,
+      min: spec.min, max: spec.max, required: numeric(spec), readOnly: !!spec.readonly,
+      value: value == null ? '' : String(value),
+      onChange: function (event) { setValue(key, event.target.value) },
+    }))
   }
-
-  return h('div', null, [
-    h('h3', { key: 't', style: { fontSize: 15 } }, 'literature 文献库配置'),
-    ...rows,
-    h('div', { key: 'actions', style: { marginTop: 12 } }, [
-      h('button', { key: 's', onClick: save, className: 'dsh-lit-btn' }, '保存'),
-      msg ? h('span', { key: 'm', style: { marginLeft: 8, fontSize: 12 } }, msg) : null,
-    ]),
-  ])
+  async function save(event) {
+    event.preventDefault()
+    if (busy || !schema) return
+    setBusy(true); setNotice(null)
+    try {
+      const payload = {}
+      Object.keys(schema).forEach(function (group) {
+        Object.keys(schema[group].items || {}).forEach(function (name) {
+          const key = group + '.' + name, spec = schema[group].items[name]
+          if (spec.readonly) return
+          const value = valueFor(key, spec)
+          if (numeric(spec)) {
+            if (value === '' || !Number.isFinite(Number(value))) throw new Error((spec.description || key) + '需要有效数值')
+            payload[key] = Number(value)
+          } else if (spec.type === 'bool' || spec.type === 'boolean') payload[key] = value === true || value === 1 || value === 'true'
+          else if (value !== undefined) payload[key] = value
+        })
+      })
+      await api('/config', { method: 'POST', body: payload })
+      setNotice({ text: '配置已保存', success: true })
+    } catch (error) { setNotice({ text: '保存失败：' + message(error), error: true }) }
+    finally { setBusy(false) }
+  }
+  return h('details', { className: 'dsh-lit-pcard' },
+    h('summary', null, 'literature 文献库配置'),
+    h('div', { className: 'dsh-lit-pcard-body' },
+      h(Notice, { text: resource.error, error: true, retry: resource.reload }),
+      resource.loading ? h(Empty, null, '加载配置…') : null,
+      schema ? h('form', { onSubmit: save },
+        Object.keys(schema).map(function (group) {
+          const spec = schema[group]
+          return h('fieldset', { key: group, className: 'dsh-lit-cfg-group' },
+            h('legend', null, spec.description || group),
+            Object.keys(spec.items || {}).map(function (name) {
+              const key = group + '.' + name, item = spec.items[name]
+              return h('div', { key: key, className: 'dsh-lit-cfg-item' },
+                h('label', { className: 'dsh-lit-cfg-label', htmlFor: formId + key }, (item.description || name) + (item.readonly ? '（只读）' : '')),
+                field(key, item))
+            }))
+        }),
+        h('div', { className: 'dsh-lit-cfg-footer' },
+          h(Notice, Object.assign({}, notice)),
+          h(Button, { type: 'submit', icon: 'save', className: 'dsh-lit-btn-primary', disabled: busy }, busy ? '保存中…' : '保存配置'))) : null))
 }
 
-// ══════════════════════════════════════════════════════════════════
-// 注册
-// ══════════════════════════════════════════════════════════════════
 function apply(ctx) {
   const slots = ctx.get('slots')
-  if (slots === undefined) return
-
-  if (typeof document !== 'undefined') {
-    const existed = document.head.querySelector('style[data-plugin="dsh-literature"]')
-    if (!existed) {
-      const styleEl = document.createElement('style')
-      styleEl.dataset.plugin = 'dsh-literature'
-      styleEl.textContent = LIT_CSS
-      document.head.appendChild(styleEl)
-    }
+  if (!slots) return
+  let style = document.head.querySelector('style[data-plugin="dsh-literature"]')
+  if (!style) {
+    style = document.createElement('style')
+    style.dataset.plugin = 'dsh-literature'
+    document.head.appendChild(style)
   }
+  style.textContent = LIT_CSS
 
-  // conversation 面板 tab：文献/知识/图谱/状况 四子视图
+  // conversation.view must use the two-argument inject contract.
   slots.inject('conversation.view', function () {
     return slots.register(
       { name: 'conversation.view', id: 'literature', order: 60, label: '📚 literature' },
-      function (props) { return React.createElement(LiteraturePanel, props) },
+      function (props) { return h(LiteraturePanel, props) },
     )
   })
-
-  // 插件配置卡片：设置 → 插件 → 插件配置页（配置项保留在此，tab 内不放置设置入口）
   slots.inject('settings.plugin.item', function* () {
     yield slots.register(
       { name: 'settings.plugin.item', id: 'literature', key: 'literature', order: 60, label: 'literature 文献库' },
-      function () { return React.createElement(ConfigView, {}) },
+      function () { return h(ConfigView, {}) },
     )
   })
 }

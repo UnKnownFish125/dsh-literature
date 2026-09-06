@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS evidence (
   page TEXT NOT NULL DEFAULT '',
   confidence REAL NOT NULL DEFAULT 0.5,
   note TEXT NOT NULL DEFAULT '',
+  zh_content TEXT NOT NULL DEFAULT '',
   deleted_at REAL,
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL,
@@ -120,7 +121,10 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
   node_depth INTEGER NOT NULL DEFAULT 0,
   node_kind TEXT NOT NULL DEFAULT 'item',
   category_id INTEGER REFERENCES categories(id),
-  node_order INTEGER NOT NULL DEFAULT 0
+  node_order INTEGER NOT NULL DEFAULT 0,
+  annotation TEXT NOT NULL DEFAULT '',
+  use_count INTEGER NOT NULL DEFAULT 0,
+  rating REAL DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_ws ON knowledge_items(workspace_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_knowledge_parent ON knowledge_items(parent_id);
@@ -343,16 +347,20 @@ class LiteratumStore:
                 rows = conn.execute(sql, args).fetchall()
         return [self._doc_from_row(r) for r in rows]
 
-    def get_document(self, doc_id, include_evidence=False):
+    def get_document(self, doc_id, include_evidence=False, workspace_id=""):
+        # 读隔离：传 workspace_id 则 WHERE 加 AND workspace_id=?；行不属于该区则视为 NotFound（不泄露）。
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM documents WHERE id=? AND deleted_at IS NULL", (int(doc_id),),
-            ).fetchone()
+            sql = "SELECT * FROM documents WHERE id=? AND deleted_at IS NULL"
+            args = [int(doc_id)]
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            row = conn.execute(sql, args).fetchone()
         if row is None:
             raise NotFoundError(f"document not found: {doc_id}")
         return self._doc_from_row(row, include_evidence=include_evidence)
 
-    def update_document(self, doc_id, changes):
+    def update_document(self, doc_id, changes, workspace_id=""):
         allowed = ("type", "title", "authors", "year", "journal", "doi", "isbn", "url",
                    "attachment_path", "attachment_sha256", "tags", "read_status", "lifecycle_status")
         with self._connect() as conn:
@@ -361,12 +369,15 @@ class LiteratumStore:
             ).fetchone()
             if row is None:
                 raise NotFoundError(f"document not found: {doc_id}")
+            # 跨区写校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace document write not authorized")
             fields = {}
             for key in allowed:
                 if key in changes:
                     fields[key] = changes[key]
             if not fields:
-                return self.get_document(doc_id)
+                return self.get_document(doc_id, workspace_id=workspace_id)
             if "type" in fields and fields["type"] not in VALID_TYPES:
                 raise DomainError(f"invalid type: {fields['type']}")
             if "read_status" in fields and fields["read_status"] not in READ_STATUSES:
@@ -392,10 +403,18 @@ class LiteratumStore:
                                    fields.get("authors", _json_loads(row["authors_json"])),
                                    fields.get("journal", row["journal"]),
                                    fields.get("tags", _json_loads(row["tags_json"])))
-        return self.get_document(doc_id)
+        return self.get_document(doc_id, workspace_id=workspace_id)
 
-    def soft_delete_document(self, doc_id):
+    def soft_delete_document(self, doc_id, workspace_id=""):
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM documents WHERE id=? AND deleted_at IS NULL", (int(doc_id),),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"document not found: {doc_id}")
+            # 跨区删校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace document delete not authorized")
             cur = conn.execute(
                 "UPDATE documents SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
                 (_now(), _now(), int(doc_id)),
@@ -429,12 +448,13 @@ class LiteratumStore:
                     raise NotFoundError(f"document not found: {doc_id}")
             cur = conn.execute(
                 "INSERT INTO evidence (claim, stance, evidence_text, doc_id, chapter_anchor, page,"
-                " confidence, note, created_at, updated_at, workspace_id)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " confidence, note, zh_content, created_at, updated_at, workspace_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (claim, stance, str(payload.get("evidence_text") or ""),
                  int(doc_id) if doc_id else None,
                  str(payload.get("chapter_anchor") or ""), str(payload.get("page") or ""),
                  float(payload.get("confidence") or 0.5), str(payload.get("note") or ""),
+                 str(payload.get("zh_content") or ""),
                  now, now, workspace_id),
             )
             ev_id = cur.lastrowid
@@ -444,16 +464,20 @@ class LiteratumStore:
             )
         return self.get_evidence(ev_id)
 
-    def get_evidence(self, ev_id):
+    def get_evidence(self, ev_id, workspace_id=""):
+        # 读隔离：传 workspace_id 则 WHERE 加 AND workspace_id=?；行不属于该区则视为 NotFound（不泄露）。
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM evidence WHERE id=? AND deleted_at IS NULL", (int(ev_id),),
-            ).fetchone()
+            sql = "SELECT * FROM evidence WHERE id=? AND deleted_at IS NULL"
+            args = [int(ev_id)]
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            row = conn.execute(sql, args).fetchone()
         if row is None:
             raise NotFoundError(f"evidence not found: {ev_id}")
         return self._evidence_from_row(row)
 
-    def update_evidence(self, ev_id, changes):
+    def update_evidence(self, ev_id, changes, workspace_id=""):
         allowed = ("claim", "stance", "evidence_text", "doc_id", "chapter_anchor",
                    "page", "confidence", "note")
         with self._connect() as conn:
@@ -462,9 +486,12 @@ class LiteratumStore:
             ).fetchone()
             if row is None:
                 raise NotFoundError(f"evidence not found: {ev_id}")
+            # 跨区写校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace evidence write not authorized")
             fields = {k: v for k, v in changes.items() if k in allowed}
             if not fields:
-                return self.get_evidence(ev_id)
+                return self.get_evidence(ev_id, workspace_id=workspace_id)
             if "stance" in fields and fields["stance"] not in VALID_STANCES:
                 raise DomainError(f"invalid stance: {fields['stance']}")
             assignments = [f"{k}=?" for k in fields] + ["updated_at=?"]
@@ -477,10 +504,18 @@ class LiteratumStore:
                     (int(ev_id), fields.get("claim", row["claim"]),
                      fields.get("evidence_text", row["evidence_text"])),
                 )
-        return self.get_evidence(ev_id)
+        return self.get_evidence(ev_id, workspace_id=workspace_id)
 
-    def soft_delete_evidence(self, ev_id):
+    def soft_delete_evidence(self, ev_id, workspace_id=""):
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM evidence WHERE id=? AND deleted_at IS NULL", (int(ev_id),),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"evidence not found: {ev_id}")
+            # 跨区删校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace evidence delete not authorized")
             cur = conn.execute(
                 "UPDATE evidence SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
                 (_now(), _now(), int(ev_id)),
@@ -532,9 +567,15 @@ class LiteratumStore:
                  int(payload.get("order_index") or 0), now, now))
         return self.get_category(cur.lastrowid)
 
-    def get_category(self, cid):
+    def get_category(self, cid, workspace_id=""):
+        # 读隔离：传 workspace_id 则 WHERE 加 AND workspace_id=?；行不属于该区则视为 NotFound（不泄露）。
         with self._connect() as conn:
-            row = conn.execute("SELECT * FROM categories WHERE id=? AND deleted_at IS NULL", (int(cid),)).fetchone()
+            sql = "SELECT * FROM categories WHERE id=? AND deleted_at IS NULL"
+            args = [int(cid)]
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            row = conn.execute(sql, args).fetchone()
         if not row:
             raise NotFoundError(f"category not found: {cid}")
         return dict(row)
@@ -553,12 +594,15 @@ class LiteratumStore:
             rows = conn.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
 
-    def update_category(self, cid, changes):
+    def update_category(self, cid, changes, workspace_id=""):
         allowed = ("name", "parent_id", "order_index")
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM categories WHERE id=? AND deleted_at IS NULL", (int(cid),)).fetchone()
             if not row:
                 raise NotFoundError(f"category not found: {cid}")
+            # 跨区写校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace category write not authorized")
             if "parent_id" in changes:
                 pid = changes.get("parent_id")
                 depth = 0 if pid is None else (
@@ -571,19 +615,26 @@ class LiteratumStore:
                 sets = [f"{k}=?" for k in fields] + ["updated_at=?"]
                 conn.execute(f"UPDATE categories SET {', '.join(sets)} WHERE id=?",
                              list(fields.values()) + [_now(), int(cid)])
-        return self.get_category(cid)
+        return self.get_category(cid, workspace_id=workspace_id)
 
-    def soft_delete_category(self, cid):
+    def soft_delete_category(self, cid, workspace_id=""):
         with self._connect() as conn:
+            row = conn.execute("SELECT * FROM categories WHERE id=? AND deleted_at IS NULL", (int(cid),)).fetchone()
+            if not row:
+                raise NotFoundError(f"category not found: {cid}")
+            # 跨区删校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace category delete not authorized")
             cur = conn.execute("UPDATE categories SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
                                (_now(), int(cid)))
             if not cur.rowcount:
                 raise NotFoundError(f"category not found: {cid}")
-            # 子类别/子知识级联软删
-            conn.execute("UPDATE categories SET deleted_at=? WHERE parent_id=? AND deleted_at IS NULL",
-                         (_now(), int(cid)))
-            conn.execute("UPDATE knowledge_items SET deleted_at=? WHERE category_id=? AND deleted_at IS NULL",
-                         (_now(), int(cid)))
+            # 子类别/子知识级联软删（仅在所属 workspace 内，避免跨区级联误伤）
+            ws = row["workspace_id"]
+            conn.execute("UPDATE categories SET deleted_at=? WHERE parent_id=? AND deleted_at IS NULL"
+                         " AND workspace_id=?", (_now(), int(cid), ws))
+            conn.execute("UPDATE knowledge_items SET deleted_at=? WHERE category_id=? AND deleted_at IS NULL"
+                         " AND workspace_id=?", (_now(), int(cid), ws))
         return {"deleted": cid}
 
     def subtree_of_category(self, cid, workspace_id=""):
@@ -766,6 +817,29 @@ class LiteratumStore:
             rows = conn.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
 
+    def list_workspaces(self):
+        """列出知识库中有数据的工作区（供前端工作区选择器）。附 DSH 友好名 title（读 workspace.json）。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT workspace_id, COUNT(*) AS c FROM knowledge_items"
+                " WHERE deleted_at IS NULL GROUP BY workspace_id ORDER BY c DESC").fetchall()
+        titles = {}
+        try:
+            import json as _json
+            wf = "/www/dsh/home/storages/workspace.json"
+            if os.path.exists(wf):
+                d = _json.load(open(wf, encoding="utf-8"))
+                tbl = d.get("tables", {}).get("workspaces", {})
+                titles = {k: (v.get("title") or k) for k, v in tbl.items()}
+        except Exception:
+            titles = {}
+        result = []
+        for r in rows:
+            wid = r["workspace_id"]
+            result.append({"workspace_id": wid, "knowledge": r["c"],
+                           "title": titles.get(wid, wid)})
+        return result
+
     def count_knowledge(self, workspace_id=""):
         with self._connect() as conn:
             sql = "SELECT COUNT(*) AS c FROM knowledge_items WHERE deleted_at IS NULL AND archived=0"
@@ -923,9 +997,12 @@ class LiteratumStore:
         if ref is None:
             return None
         if isinstance(ref, (int, float)) and not isinstance(ref, bool):
-            row = conn.execute(
-                "SELECT id FROM knowledge_items WHERE id=? AND deleted_at IS NULL", (int(ref),),
-            ).fetchone()
+            sql = "SELECT id FROM knowledge_items WHERE id=? AND deleted_at IS NULL"
+            args = [int(ref)]
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            row = conn.execute(sql, args).fetchone()
             return row["id"] if row else None
         name = str(ref).strip()
         if not name:
@@ -936,11 +1013,15 @@ class LiteratumStore:
         ).fetchone()
         return row["id"] if row else None
 
-    def get_knowledge_item(self, kid):
+    def get_knowledge_item(self, kid, workspace_id=""):
+        # 读隔离：传 workspace_id 则 WHERE 加 AND workspace_id=?；行不属于该区则视为 NotFound（不泄露）。
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM knowledge_items WHERE id=? AND deleted_at IS NULL", (int(kid),),
-            ).fetchone()
+            sql = "SELECT * FROM knowledge_items WHERE id=? AND deleted_at IS NULL"
+            args = [int(kid)]
+            if workspace_id:
+                sql += " AND workspace_id=?"
+                args.append(workspace_id)
+            row = conn.execute(sql, args).fetchone()
             if row is None:
                 raise NotFoundError(f"knowledge item not found: {kid}")
             rels = conn.execute(
@@ -967,14 +1048,17 @@ class LiteratumStore:
         d["sources"] = [s["evidence_id"] for s in srcs]
         return d
 
-    def update_knowledge_item(self, kid, changes):
-        allowed = ("concept", "summary", "notes")
+    def update_knowledge_item(self, kid, changes, workspace_id=""):
+        allowed = ("concept", "summary", "notes", "annotation", "use_count", "rating")
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM knowledge_items WHERE id=? AND deleted_at IS NULL", (int(kid),),
             ).fetchone()
             if row is None:
                 raise NotFoundError(f"knowledge item not found: {kid}")
+            # 跨区写校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace knowledge write not authorized")
             fields = {k: v for k, v in changes.items() if k in allowed}
             workspace_id = row["workspace_id"]
             if fields:
@@ -1013,10 +1097,26 @@ class LiteratumStore:
                         " VALUES (?,?,?,NULL)",
                         (int(eid), int(kid), workspace_id),
                     )
-        return self.get_knowledge_item(kid)
+        return self.get_knowledge_item(kid, workspace_id=workspace_id)
 
-    def soft_delete_knowledge_item(self, kid):
+    def record_knowledge_use(self, kid):
+        """记录知识被使用一次（use_count+1）。供 agent 引用/展示时调用。"""
         with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE knowledge_items SET use_count=use_count+1, updated_at=? WHERE id=? AND deleted_at IS NULL",
+                (_now(), int(kid)))
+        return cur.rowcount
+
+    def soft_delete_knowledge_item(self, kid, workspace_id=""):
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM knowledge_items WHERE id=? AND deleted_at IS NULL", (int(kid),),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"knowledge item not found: {kid}")
+            # 跨区删校验：传入 workspace_id 必须与资源所属区一致（默认隔离）
+            if workspace_id and row["workspace_id"] != workspace_id:
+                raise PermissionDenied("cross-workspace knowledge delete not authorized")
             cur = conn.execute(
                 "UPDATE knowledge_items SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
                 (_now(), _now(), int(kid)),

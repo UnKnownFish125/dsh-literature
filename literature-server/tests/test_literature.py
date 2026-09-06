@@ -238,6 +238,26 @@ class P0WorkspaceIsolationTest(unittest.TestCase):
         kn, mem = self.store.kb_bias_constraints(workspace_id="")
         self.assertEqual((kn, mem), ([], set()))
 
+    def test_cross_workspace_write_denied(self):
+        # w1 建知识，w2 调 update_knowledge_item(id, {"concept":"x"}, workspace_id="w2") 应抛 PermissionDenied
+        k1 = self.store.create_knowledge_item({"concept": "认知负荷", "workspace_id": "w1"})["id"]
+        with self.assertRaises(PermissionDenied):
+            self.store.update_knowledge_item(k1, {"concept": "x"}, workspace_id="w2")
+
+    def test_resolve_knowledge_ref_cross_workspace(self):
+        # w1 建知识，w2 调 _resolve_knowledge_ref(conn, owner_id, ref=w1知识id, workspace_id="w2") 应返回 None
+        # （数字分支跨区不应解析出 id，防止跨区建关系）
+        k1 = self.store.create_knowledge_item({"concept": "认知负荷", "workspace_id": "w1"})["id"]
+        with self.store._connect() as conn:
+            result = self.store._resolve_knowledge_ref(conn, owner_id=0, ref=k1, workspace_id="w2")
+        self.assertIsNone(result)
+
+    def test_cross_workspace_update_document_denied(self):
+        # w1 建 doc，w2 调 update_document(id, {"title":"x"}, workspace_id="w2") 应抛 PermissionDenied
+        d = self.store.create_document({"title": "标题", "workspace_id": "w1"})
+        with self.assertRaises(PermissionDenied):
+            self.store.update_document(d["id"], {"title": "x"}, workspace_id="w2")
+
 
 if __name__ == "__main__":
     unittest.main()

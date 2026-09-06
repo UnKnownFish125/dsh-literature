@@ -203,9 +203,9 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length))
 
-    def _attachment_url(self, doc_id):
+    def _attachment_url(self, doc_id, workspace_id=""):
         """为文档附件生成带签名的下载 URL（TTL 300s）。无附件返回 {"url": ""}。"""
-        doc = get_store().get_document(doc_id)
+        doc = get_store().get_document(doc_id, workspace_id=workspace_id)
         if not doc or not doc.get("attachment_path"):
             return {"url": ""}
         import time as _t
@@ -322,13 +322,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._v2_call(lambda: self._send(200, {"config": store.get_settings()}))
             if len(parts) == 5 and parts[:3] == ["v1", "literature", "documents"] and parts[4] == "attachment-url":
                 doc_id = int(parts[3])
-                return self._v2_call(lambda: self._send(200, self._attachment_url(doc_id)))
+                return self._v2_call(lambda: self._send(200, self._attachment_url(
+                    doc_id, workspace_id=qs.get("workspace_id", [""])[0])))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "documents"]:
                 doc_id = int(parts[3])
-                return self._v2_call(lambda: self._send(200, {"document": store.get_document(doc_id, include_evidence=True)}))
+                return self._v2_call(lambda: self._send(200, {"document": store.get_document(
+                    doc_id, include_evidence=True, workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "evidence"]:
                 ev_id = int(parts[3])
-                return self._v2_call(lambda: self._send(200, {"evidence": store.get_evidence(ev_id)}))
+                return self._v2_call(lambda: self._send(200, {"evidence": store.get_evidence(
+                    ev_id, workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge-browse":
                 return self._v2_call(lambda: self._send(200, {"items": store.list_knowledge(
                     workspace_id=qs.get("workspace_id", [""])[0],
@@ -354,12 +357,15 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 5 and parts[:3] == ["v1", "literature", "knowledge"] and parts[4] == "subtree":
                 return self._v2_call(lambda: self._send(200, {"items": store.subtree_of_knowledge(
                     int(parts[3]), workspace_id=qs.get("workspace_id", [""])[0])}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "workspaces":
+                return self._v2_call(lambda: self._send(200, {"workspaces": store.list_workspaces()}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge-count":
                 return self._v2_call(lambda: self._send(200, {"count": store.count_knowledge(
                     workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"] and parts[3].isdigit():
                 kid = int(parts[3])
-                return self._v2_call(lambda: self._send(200, {"knowledge": store.get_knowledge_item(kid)}))
+                return self._v2_call(lambda: self._send(200, {"knowledge": store.get_knowledge_item(
+                    kid, workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "documents":
                 return self._v2_call(lambda: self._send(200, {"documents": store.list_documents(
                     workspace_id=qs.get("workspace_id", [""])[0],
@@ -384,7 +390,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self._reject_browser_origin():
                 return
-            path = urllib.parse.urlparse(self.path).path
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
             store = get_store()
 
@@ -475,6 +483,16 @@ class Handler(BaseHTTPRequestHandler):
                     q, k=int(body.get("k") or 10),
                     workspace_id=str(body.get("workspace_id") or ""),
                     library=body.get("library") or None)}))
+            if len(parts) == 5 and parts[:3] == ["v1", "literature", "knowledge"] and parts[4] == "use":
+                return self._v2_call(lambda: self._send(200, {"used": store.record_knowledge_use(int(parts[3]))}))
+            if len(parts) == 5 and parts[:3] == ["v1", "literature", "knowledge"] and parts[4] == "rate":
+                return self._v2_call(lambda: self._send(200, {"knowledge": store.update_knowledge_item(
+                    int(parts[3]), {"rating": body.get("rating")},
+                    workspace_id=qs.get("workspace_id", [""])[0])}))
+            if len(parts) == 6 and parts[:3] == ["v1", "literature", "knowledge"] and parts[5] == "rate":
+                return self._v2_call(lambda: self._send(200, {"knowledge": store.update_knowledge_item(
+                    int(parts[3]), {"rating": body.get("rating")},
+                    workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"] and parts[3] == "rebuild":
                 return self._v2_call(lambda: self._send(200, {"rebuilt": store.rebuild_knowledge_vectors()}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "knowledge":
@@ -504,18 +522,24 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self._reject_browser_origin():
                 return
-            path = urllib.parse.urlparse(self.path).path
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
             store = get_store()
             body = self._read_body()
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "categories"]:
-                return self._v2_call(lambda: self._send(200, {"category": store.update_category(int(parts[3]), body)}))
+                return self._v2_call(lambda: self._send(200, {"category": store.update_category(
+                    int(parts[3]), body, workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "documents"]:
-                return self._v2_call(lambda: self._send(200, {"document": store.update_document(int(parts[3]), body)}))
+                return self._v2_call(lambda: self._send(200, {"document": store.update_document(
+                    int(parts[3]), body, workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "evidence"]:
-                return self._v2_call(lambda: self._send(200, {"evidence": store.update_evidence(int(parts[3]), body)}))
+                return self._v2_call(lambda: self._send(200, {"evidence": store.update_evidence(
+                    int(parts[3]), body, workspace_id=qs.get("workspace_id", [""])[0])}))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"]:
-                return self._v2_call(lambda: self._send(200, {"knowledge": store.update_knowledge_item(int(parts[3]), body)}))
+                return self._v2_call(lambda: self._send(200, {"knowledge": store.update_knowledge_item(
+                    int(parts[3]), body, workspace_id=qs.get("workspace_id", [""])[0])}))
             return self._send(404, {"error": "not found"})
         except Exception as exc:
             return self._handle_error(exc)
@@ -524,17 +548,23 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self._reject_browser_origin():
                 return
-            path = urllib.parse.urlparse(self.path).path
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
             store = get_store()
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "categories"]:
-                return self._v2_call(lambda: self._send(200, store.soft_delete_category(int(parts[3]))))
+                return self._v2_call(lambda: self._send(200, store.soft_delete_category(
+                    int(parts[3]), workspace_id=qs.get("workspace_id", [""])[0])))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "documents"]:
-                return self._v2_call(lambda: self._send(200, store.soft_delete_document(int(parts[3]))))
+                return self._v2_call(lambda: self._send(200, store.soft_delete_document(
+                    int(parts[3]), workspace_id=qs.get("workspace_id", [""])[0])))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "evidence"]:
-                return self._v2_call(lambda: self._send(200, store.soft_delete_evidence(int(parts[3]))))
+                return self._v2_call(lambda: self._send(200, store.soft_delete_evidence(
+                    int(parts[3]), workspace_id=qs.get("workspace_id", [""])[0])))
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "knowledge"]:
-                return self._v2_call(lambda: self._send(200, store.soft_delete_knowledge_item(int(parts[3]))))
+                return self._v2_call(lambda: self._send(200, store.soft_delete_knowledge_item(
+                    int(parts[3]), workspace_id=qs.get("workspace_id", [""])[0])))
             return self._send(404, {"error": "not found"})
         except Exception as exc:
             return self._handle_error(exc)

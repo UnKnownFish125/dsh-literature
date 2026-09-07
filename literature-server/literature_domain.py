@@ -851,20 +851,16 @@ class LiteratumStore:
         return result
 
     def count_knowledge(self, workspace_id=""):
+        """知识条数统计：bias（全局约束）不计入。只算非 bias 知识。"""
         with self._connect() as conn:
-            # 非 bias 按 workspace；bias 全局（豁免 ws，任何工作区都计入全部 bias）
             sql = ("SELECT COUNT(*) AS c FROM knowledge_items"
-                   " WHERE deleted_at IS NULL AND archived=0 AND (library<>'bias' OR library IS NULL)")
+                   " WHERE deleted_at IS NULL AND archived=0 AND library<>'bias'")
             args = []
             if workspace_id:
                 sql += " AND workspace_id=?"
                 args.append(workspace_id)
             row = conn.execute(sql, args).fetchone()
-            base = row["c"] if row else 0
-            bias_row = conn.execute(
-                "SELECT COUNT(*) AS c FROM knowledge_items WHERE deleted_at IS NULL AND archived=0 AND library='bias'"
-            ).fetchone()
-        return base + (bias_row["c"] if bias_row else 0)
+        return row["c"] if row else 0
 
     def ingest_memory_archive(self, memories):
         """deepmemory export-archive 结果 → memory_archive 原料归档层（幂等：按 memory_id 去重）。"""

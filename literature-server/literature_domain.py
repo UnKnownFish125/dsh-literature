@@ -818,26 +818,35 @@ class LiteratumStore:
         return [dict(r) for r in rows]
 
     def list_workspaces(self):
-        """列出知识库中有数据的工作区（供前端工作区选择器）。附 DSH 友好名 title（读 workspace.json）。"""
+        """列出全部宿主工作区（含空区，供工作区下拉）。知识计数按库聚合；附 DSH 友好名 title。"""
         with self._connect() as conn:
-            rows = conn.execute(
+            counts = dict(conn.execute(
                 "SELECT workspace_id, COUNT(*) AS c FROM knowledge_items"
-                " WHERE deleted_at IS NULL GROUP BY workspace_id ORDER BY c DESC").fetchall()
-        titles = {}
+                " WHERE deleted_at IS NULL GROUP BY workspace_id").fetchall())
+        host_ws = {}
         try:
             import json as _json
             wf = "/www/dsh/home/storages/workspace.json"
             if os.path.exists(wf):
                 d = _json.load(open(wf, encoding="utf-8"))
                 tbl = d.get("tables", {}).get("workspaces", {})
-                titles = {k: (v.get("title") or k) for k, v in tbl.items()}
+                host_ws = {k: (v.get("title") or k) for k, v in tbl.items()}
+            # 补存在但记录缺失的 work spaces（防 title 空）
+            for wid in list(counts):
+                host_ws.setdefault(wid, wid)
         except Exception:
-            titles = {}
+            pass
+        ids = list(host_ws)
+        # 缺失 title 时补 counts 里出现的（尚未入 host 表）
+        for wid in counts:
+            if wid not in ids:
+                ids.append(wid)
         result = []
-        for r in rows:
-            wid = r["workspace_id"]
-            result.append({"workspace_id": wid, "knowledge": r["c"],
-                           "title": titles.get(wid, wid)})
+        for wid in ids:
+            result.append({"workspace_id": wid, "knowledge": counts.get(wid, 0),
+                           "title": host_ws.get(wid, wid)})
+        # 有知识的优先排序
+        result.sort(key=lambda w: (-w["knowledge"], w["title"]))
         return result
 
     def count_knowledge(self, workspace_id=""):
@@ -909,17 +918,14 @@ class LiteratumStore:
         return [dict(r) for r in rows]
 
     def kb_bias_constraints(self, workspace_id="", k=50):
-        """轨 B：bias 知识约束（含 source_memory_id——N4 去重用）；
-        返回（知识项列表, 已知识化的记忆 id 集合）。
-        隔离：默认取本 workspace 的 bias；空 workspace 视为未授权，不返回全库 bias。
-        （bias 为全局约束，跨区共享的受控来源由 ACL/全局 scope 在二期细化；一期先默认本区。）"""
-        if not str(workspace_id or "").strip():
-            return [], set()
+        """轨 B：bias 全局行为约束（含 source_memory_id——N4 去重用）。
+        bias 为 scope='global' 的跨区共享约束（v0.3 裁决 15）：任意工作区均可读，
+        用于注入 system prompt 的受控行为前提。空 workspace 即返回全部 bias（全局约束）。"""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, concept, summary, source_memory_id, workspace_id, updated_at"
-                " FROM knowledge_items WHERE library='bias' AND workspace_id=? AND deleted_at IS NULL"
-                " ORDER BY id ASC LIMIT ?", (workspace_id, k)).fetchall()
+                " FROM knowledge_items WHERE library='bias' AND deleted_at IS NULL"
+                " ORDER BY id ASC LIMIT ?", (k,)).fetchall()
         items = []
         mem_ids = set()
         for r in rows:

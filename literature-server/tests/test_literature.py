@@ -232,11 +232,13 @@ class P0WorkspaceIsolationTest(unittest.TestCase):
         with self.assertRaises(DomainError):
             self.store.subtree_of_category(c["id"], workspace_id="")
 
-    def test_bias_constraints_requires_workspace(self):
-        # 空 workspace 拉 bias 约束应返回空（默认隔离，不泄露全库 bias）
+    def test_bias_constraints_global(self):
+        # bias 为全局行为约束：任意/空 workspace 都应返回全部 bias（跨区共享约束）
         self.store.create_knowledge_item({"concept": "约束1", "workspace_id": "w1", "library": "bias"})
-        kn, mem = self.store.kb_bias_constraints(workspace_id="")
-        self.assertEqual((kn, mem), ([], set()))
+        kn_all, _ = self.store.kb_bias_constraints(workspace_id="")
+        self.assertEqual(len(kn_all), 1)
+        kn_other, _ = self.store.kb_bias_constraints(workspace_id="w2")
+        self.assertEqual(len(kn_other), 1)
 
     def test_cross_workspace_write_denied(self):
         # w1 建知识，w2 调 update_knowledge_item(id, {"concept":"x"}, workspace_id="w2") 应抛 PermissionDenied

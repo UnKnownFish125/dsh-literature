@@ -137,31 +137,19 @@ const LIT_CSS = `
 .dsh-lit-stat { display:flex; flex-direction:column; gap:8px; background:var(--dsw-alias-bg-layer-1); }
 .dsh-lit-stat-big { font-size:24px; font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
 .dsh-lit-stat-lines { display:flex; flex-direction:column; gap:4px; color:var(--dsw-alias-label-secondary); font-size:12px; overflow-wrap:anywhere; }
-.dsh-lit-graph-view { position:relative; min-width:0; }
-.dsh-lit-graph-content { display:flex; flex-direction:column; gap:12px; min-width:0; }
-.dsh-lit-graph-content[hidden] { display:none; }
+.dsh-lit-graphbox { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; min-width:0; }
+.dsh-lit-graphbox-selected { grid-template-columns:minmax(0, 1fr) 220px; }
 .dsh-lit-graph-stage { min-width:0; position:relative; }
-.dsh-lit-graph-svg { width:100%; height:clamp(480px, 86vh, 920px); display:block; overflow:hidden; overscroll-behavior:contain; background:var(--dsw-alias-bg-layer-1); border:1px solid var(--dsw-alias-border-l1); border-radius:8px; touch-action:none; cursor:grab; }
+.dsh-lit-graph-svg { width:100%; height:clamp(360px, 62vh, 640px); display:block; overflow:hidden; overscroll-behavior:contain; background:var(--dsw-alias-bg-layer-1); border:1px solid var(--dsw-alias-border-l1); border-radius:8px; touch-action:none; cursor:grab; }
 .dsh-lit-graph-svg:active { cursor:grabbing; }
-.dsh-lit-graph-node { cursor:pointer; transition:opacity .14s; }
-.dsh-lit-graph-node:active { cursor:grabbing; }
-.dsh-lit-graph-label { fill:var(--dsw-alias-label-primary); paint-order:stroke; stroke:var(--dsw-alias-bg-layer-1); stroke-linejoin:round; pointer-events:none; }
+.dsh-lit-graph-node { cursor:grab; transition:opacity .14s; }
+.dsh-lit-graph-label { fill:var(--dsw-alias-label-primary); font-size:11px; paint-order:stroke; stroke:var(--dsw-alias-bg-layer-1); stroke-width:3px; stroke-linejoin:round; pointer-events:none; }
 .dsh-lit-graph-edge { stroke:var(--dsw-alias-border-l2); }
-.dsh-lit-graph-island { fill-opacity:.07; stroke-opacity:.24; stroke-width:1; pointer-events:none; }
-.dsh-lit-graph-legend { display:flex; align-items:center; gap:6px 16px; flex-wrap:wrap; max-height:104px; overflow:auto; font-size:11px; color:var(--dsw-alias-label-secondary); }
-.dsh-lit-graph-key { display:inline-flex; align-items:center; gap:5px; max-width:100%; }
-.dsh-lit-graph-key-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px; }
+.dsh-lit-graph-legend { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--dsw-alias-label-secondary); }
+.dsh-lit-graph-key { display:inline-flex; align-items:center; gap:5px; }
 .dsh-lit-graph-dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
 .dsh-lit-graph-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:20px; pointer-events:none; color:var(--dsw-alias-label-secondary); text-align:center; }
-.dsh-lit-graph-zoom { width:48px; text-align:center; font-variant-numeric:tabular-nums; flex:none; }
-.dsh-lit-graph-fullscreen, .dsh-lit-graph-view:fullscreen { position:fixed; inset:0; width:100vw; height:100vh; max-width:none; margin:0; padding:0; z-index:10000; background:var(--dsw-alias-bg-layer-1); color:var(--dsw-alias-label-primary); overflow:hidden; }
-.dsh-lit-graph-fullscreen .dsh-lit-graph-svg { width:100vw; height:100vh; border:0; border-radius:0; }
-.dsh-lit-graph-fullscreen .dsh-lit-graph-controls { position:absolute; top:0; left:0; right:0; z-index:2; padding:10px 12px; background:var(--dsw-alias-bg-layer-1); border-bottom:1px solid var(--dsw-alias-border-l1); }
-.dsh-lit-graph-fullscreen .dsh-lit-graph-legend { position:absolute; bottom:0; left:0; right:0; z-index:2; padding:10px 12px; background:var(--dsw-alias-bg-layer-1); border-top:1px solid var(--dsw-alias-border-l1); }
-.dsh-lit-graph-fullscreen .dsh-lit-graph-detail { height:100vh; padding:20px; overflow:auto; }
-.dsh-lit-graph-fullscreen .dsh-lit-graph-detail > .dsh-lit-stack { max-width:1080px; margin:0 auto; }
-.dsh-lit-graph-fullscreen .dsh-lit-graph-error { position:absolute; top:100px; left:12px; right:12px; z-index:2; background:var(--dsw-alias-bg-layer-1); }
-.dsh-lit-panel:has(.dsh-lit-graph-fullscreen) { container-type:normal; }
+.dsh-lit-side { display:flex; flex-direction:column; gap:10px; padding-left:12px; border-left:1px solid var(--dsw-alias-border-l1); min-width:0; }
 .dsh-lit-pcard { border:1px solid var(--dsw-alias-border-l2); background:var(--dsw-alias-bg-layer-1); border-radius:8px; list-style:none; }
 .dsh-lit-pcard[open] { background:var(--dsw-alias-bg-layer-2); }
 .dsh-lit-pcard > summary { cursor:pointer; padding:14px 16px; font-weight:600; }
@@ -173,7 +161,8 @@ const LIT_CSS = `
 .dsh-lit-cfg-label { font-weight:500; overflow-wrap:anywhere; }
 .dsh-lit-cfg-footer { display:flex; align-items:center; justify-content:flex-end; gap:8px; border-top:1px solid var(--dsw-alias-border-l2); padding-top:10px; }
 .dsh-lit-cfg-footer .dsh-lit-notice { flex:1; }
-@container (max-width:420px) { .dsh-lit-stat-grid { grid-template-columns:minmax(0, 1fr); } .dsh-lit-relation { grid-template-columns:minmax(0, 1fr); } }
+@container (max-width:620px) { .dsh-lit-graphbox-selected { grid-template-columns:minmax(0, 1fr); } .dsh-lit-side { border-left:0; border-top:1px solid var(--dsw-alias-border-l1); padding:12px 0 0; } }
+@container (max-width:420px) { .dsh-lit-stat-grid { grid-template-columns:minmax(0, 1fr); } .dsh-lit-graph-svg { height:380px; } .dsh-lit-relation { grid-template-columns:minmax(0, 1fr); } }
 @media (max-width:480px) { .dsh-lit-panel { padding:12px; } .dsh-lit-tab { padding:5px 2px; } }
 
 `
@@ -197,34 +186,12 @@ function message(error) { return String(error && error.message || error) }
 function list(value) { return Array.isArray(value) ? value : [] }
 function pathFor(kind, id, workspaceId) { return '/' + kind + '/' + encodeURIComponent(String(id)) + qs({ workspace_id: workspaceId }) }
 
-// ── shell 级会话/工作区接线：conversation.view 的 props 从不含工作区信息
-//（宿主从未提供 props.useWorkspaces），改为在 apply(ctx) 直连 shell 的
-//    sessions/workspaces 服务，订阅快照解析「当前会话 → 所在工作区」
-//（与 dsh-livetaskboard 同款模式；工作区 ID 即宿主 workspaceId，与
-//    literature server list_workspaces 读 workspace.json 补 title 的口径一致）。
-const shellServices = { sessions: null, workspaces: null }
-
-function useShellSnapshot(service, empty) {
-  const [snap, setSnap] = React.useState(function () {
-    return service && service.list ? service.list.getSnapshot() : empty
-  })
-  React.useEffect(function () {
-    if (!service || !service.list) return
-    const update = function () { setSnap(service.list.getSnapshot()) }
-    const off = service.list.subscribe(update)
-    update()
-    return function () { off() }
-  }, [service])
-  return snap
-}
-
-function resolveWorkspaceId(props, sessionsSnap, workspacesSnap) {
-  const sid = props && props.sessionId ? String(props.sessionId)
-    : sessionsSnap && sessionsSnap.current ? String(sessionsSnap.current) : ''
-  const current = sid ? list(workspacesSnap && workspacesSnap.items).find(function (workspace) {
-    return list(workspace.sessionIds).map(String).indexOf(sid) >= 0
-  }) : null
-  return current && (current.workspaceId || current.id) ? String(current.workspaceId || current.id) : DEFAULT_WORKSPACE
+function resolveWorkspaceId(props) {
+  const sid = props && props.sessionId ? String(props.sessionId) : ''
+  const workspaces = typeof props.useWorkspaces === 'function'
+    ? props.useWorkspaces(function (state) { return state && state.items || [] }) : []
+  const current = list(workspaces).find(function (workspace) { return list(workspace.sessionIds).indexOf(sid) >= 0 })
+  return current && current.workspaceId ? String(current.workspaceId) : DEFAULT_WORKSPACE
 }
 
 function Button(props) {
@@ -519,172 +486,93 @@ function DocumentsView(props) {
       !docs.length && !resource.error ? h(Empty, null, resource.loading ? '加载文档…' : query ? '没有匹配的文档' : '暂无文档') : null))
 }
 
-const GRAPH_THEME_COLORS = [
-  '#3685db', '#d95f76', '#299b83', '#b38a25', '#9274ce', '#289eb8',
-  '#d77a40', '#729b38', '#ce6caf', '#647fcb', '#ab775c', '#5f9998',
-]
-
-// Undirected, deduplicated relations drive themes; library never affects membership.
-function buildGraphThemes(nodes, edges) {
-  const adjacency = new Map(nodes.map(function (node) { return [String(node.id), new Set()] }))
+// Preserve the existing deepmemory-style force layout.
+function buildGraphLayout(nodes, edges, width, height, seed) {
+  const out = {}
+  const n = nodes.length
+  if (!n) return out
+  const byId = {}
+  const deg = {}
   edges.forEach(function (edge) {
-    const a = String(edge.source), b = String(edge.target)
-    if (a === b || !adjacency.has(a) || !adjacency.has(b)) return
-    adjacency.get(a).add(b); adjacency.get(b).add(a)
+    deg[String(edge.source)] = (deg[String(edge.source)] || 0) + 1
+    deg[String(edge.target)] = (deg[String(edge.target)] || 0) + 1
   })
-  const ids = Array.from(adjacency.keys()).sort(function (a, b) {
-    return adjacency.get(b).size - adjacency.get(a).size || a.localeCompare(b)
-  })
-  const labels = new Map(ids.map(function (id) { return [id, id] }))
-  // Retaining the current label on ties prevents oscillation; sorted neighbors make refreshes stable.
-  for (let pass = 0; pass < 40; pass += 1) {
-    let changed = false
-    const order = pass % 2 ? ids.slice().reverse() : ids
-    order.forEach(function (id) {
-      const votes = new Map()
-      Array.from(adjacency.get(id)).sort().forEach(function (neighbor) {
-        const label = labels.get(neighbor)
-        votes.set(label, (votes.get(label) || 0) + 1)
-      })
-      let best = labels.get(id), score = votes.get(best) || 0
-      votes.forEach(function (count, label) { if (count > score) { best = label; score = count } })
-      if (best !== labels.get(id)) { labels.set(id, best); changed = true }
-    })
-    if (!changed) break
-  }
-  // Split any disconnected remnants of a propagated label, including isolated nodes.
-  const visited = new Set(), groups = []
-  ids.forEach(function (id) {
-    if (visited.has(id)) return
-    const members = [id]
-    visited.add(id)
-    for (let i = 0; i < members.length; i += 1) {
-      adjacency.get(members[i]).forEach(function (neighbor) {
-        if (!visited.has(neighbor) && labels.get(neighbor) === labels.get(id)) {
-          visited.add(neighbor); members.push(neighbor)
-        }
-      })
+  const cx = width / 2
+  const cy = height / 2
+  const sd = seed || 0
+  nodes.forEach(function (node, index) {
+    const id = String(node.id)
+    const golden = (index + sd * 0.618) * 2.399963229728653
+    const spread = Math.min(width, height) * 0.46 * Math.sqrt((index + 1) / Math.max(1, n))
+    const item = {
+      id: id,
+      x: cx + Math.cos(golden) * spread,
+      y: cy + Math.sin(golden) * spread,
+      vx: 0, vy: 0,
+      r: 9 + Math.min(13, Math.sqrt(deg[id] || 0) * 2.2),
     }
-    groups.push(members.sort())
+    out[id] = item
+    byId[id] = item
   })
-  groups.sort(function (a, b) { return b.length - a.length || a[0].localeCompare(b[0]) })
-  const nodeMap = new Map(nodes.map(function (node) { return [String(node.id), node] }))
-  const byNode = new Map()
-  const themes = groups.map(function (members, index) {
-    const concepts = new Map()
-    members.forEach(function (id) {
-      const concept = String(nodeMap.get(id).concept || '').trim()
-      if (concept) concepts.set(concept, (concepts.get(concept) || 0) + 1)
-    })
-    const ranked = members.slice().sort(function (a, b) {
-      const ca = String(nodeMap.get(a).concept || '').trim(), cb = String(nodeMap.get(b).concept || '').trim()
-      return (concepts.get(cb) || 0) - (concepts.get(ca) || 0) || adjacency.get(b).size - adjacency.get(a).size || a.localeCompare(b)
-    })
-    const theme = { id: members[0], members: members, representative: ranked[0],
-      name: String(nodeMap.get(ranked[0]).concept || '主题 ' + (index + 1)), color: GRAPH_THEME_COLORS[index % GRAPH_THEME_COLORS.length] }
-    members.forEach(function (id) { byNode.set(id, theme) })
-    return theme
-  })
-  return { themes: themes, byNode: byNode, adjacency: adjacency }
-}
-
-function buildGraphLayout(nodes, edges, width, height, seed, communities, inset) {
-  const positions = Object.create(null), islands = []
-  if (!nodes.length) return { positions: positions, islands: islands }
-  const top = inset ? inset.top : 36, bottom = inset ? inset.bottom : 36
-  const usableHeight = Math.max(100, height - top - bottom)
-  const aspect = Math.max(0.2, (width - 72) / usableHeight)
-  const localEdges = new Map(communities.themes.map(function (theme) { return [theme.id, []] }))
-  edges.forEach(function (edge) {
-    const a = communities.byNode.get(String(edge.source)), b = communities.byNode.get(String(edge.target))
-    if (a && a === b && String(edge.source) !== String(edge.target)) localEdges.get(a.id).push(edge)
-  })
-  communities.themes.forEach(function (theme) {
-    const radius = 42 + Math.sqrt(theme.members.length) * 48
-    const island = { theme: theme, x: 0, y: 0, r: radius }
-    // Pack nonoverlapping islands near the center, respecting the viewport aspect ratio.
-    if (islands.length) {
-      let best = null, score = Infinity
-      islands.forEach(function (anchor) {
-        for (let step = 0; step < 48; step += 1) {
-          const angle = step * Math.PI / 24
-          const x = anchor.x + Math.cos(angle) * (anchor.r + radius + 24)
-          const y = anchor.y + Math.sin(angle) * (anchor.r + radius + 24)
-          const cost = x * x / aspect + y * y * aspect
-          if (cost >= score || islands.some(function (other) { return Math.hypot(x - other.x, y - other.y) < radius + other.r + 23 })) continue
-          best = { x: x, y: y }; score = cost
-        }
-      })
-      island.x = best ? best.x : Math.max.apply(null, islands.map(function (other) { return other.x + other.r })) + radius + 24
-      island.y = best ? best.y : 0
-    }
-    islands.push(island)
-    const points = theme.members.map(function (id, index) {
-      const angle = (index + seed * 0.618) * 2.399963229728653
-      const spread = theme.members.length === 1 ? 0 : (radius - 44) * Math.sqrt((index + 0.5) / theme.members.length)
-      const point = { id: id, x: Math.cos(angle) * spread, y: Math.sin(angle) * spread,
-        vx: 0, vy: 0, r: 9 + Math.min(10, Math.sqrt(communities.adjacency.get(id).size) * 1.8) }
-      positions[id] = point
-      return point
-    })
-    const iterations = points.length > 240 ? 160 : 280
-    function constrain(point) {
-      const distance = Math.hypot(point.x, point.y), limit = radius - point.r - 22
-      if (distance > limit) { point.x *= limit / distance; point.y *= limit / distance }
-    }
-    for (let tick = 0; tick < iterations; tick += 1) {
-      for (let i = 0; i < points.length; i += 1) {
-        const a = points[i]
-        for (let j = i + 1; j < points.length; j += 1) {
-          const b = points[j]
-          const dx = b.x - a.x || 0.01, dy = b.y - a.y || 0.01
-          const distance = Math.hypot(dx, dy), min = a.r + b.r + 48
-          const repulsion = Math.min(8, 12000 / (distance * distance)) + Math.max(0, min - distance) * 0.16
-          const fx = dx / distance * repulsion, fy = dy / distance * repulsion
-          a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy
-        }
+  if (n === 1) { const it = out[String(nodes[0].id)]; it.x = cx; it.y = cy }
+  const iterations = n > 240 ? 70 : n > 120 ? 95 : 130
+  for (let tick = 0; tick < iterations; tick += 1) {
+    const cooling = 1 - tick / iterations
+    const ids = Object.keys(byId)
+    for (let i = 0; i < ids.length; i += 1) {
+      const a = byId[ids[i]]
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const b = byId[ids[j]]
+        let dx = b.x - a.x, dy = b.y - a.y
+        let d2 = dx * dx + dy * dy
+        if (d2 < 1) { dx = ((i + 1) * 17) % 13 - 6; dy = ((j + 1) * 19) % 13 - 6; d2 = dx * dx + dy * dy || 1 }
+        const dist = Math.sqrt(d2)
+        const min = a.r + b.r + 26
+        const rep = Math.min(3.6, 5200 / d2) + (dist < min ? (min - dist) * 0.06 : 0)
+        const fx = dx / dist * rep, fy = dy / dist * rep
+        a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy
       }
-      localEdges.get(theme.id).forEach(function (edge) {
-        const a = positions[String(edge.source)], b = positions[String(edge.target)]
-        const dx = b.x - a.x, dy = b.y - a.y, distance = Math.hypot(dx, dy) || 1
-        const pull = (distance - 170) * 0.009
-        a.vx += dx / distance * pull; a.vy += dy / distance * pull
-        b.vx -= dx / distance * pull; b.vy -= dy / distance * pull
-      })
-      points.forEach(function (point) {
-        point.vx = (point.vx - point.x * 0.002) * 0.65
-        point.vy = (point.vy - point.y * 0.002) * 0.65
-        point.x += point.vx * (1 - tick / iterations * 0.7)
-        point.y += point.vy * (1 - tick / iterations * 0.7)
-        constrain(point)
-      })
     }
-    for (let pass = 0; pass < 32; pass += 1) {
-      points.forEach(function (a, i) {
-        for (let j = i + 1; j < points.length; j += 1) {
-          const b = points[j], dx = b.x - a.x || 0.01, dy = b.y - a.y || 0.01
-          const distance = Math.hypot(dx, dy), shift = Math.max(0, a.r + b.r + 44 - distance) / 2
-          a.x -= dx / distance * shift; a.y -= dy / distance * shift
-          b.x += dx / distance * shift; b.y += dy / distance * shift
-        }
-      })
-      points.forEach(constrain)
-    }
-    points.forEach(function (point) { point.x += island.x; point.y += island.y })
-  })
-  const minX = Math.min.apply(null, islands.map(function (island) { return island.x - island.r }))
-  const maxX = Math.max.apply(null, islands.map(function (island) { return island.x + island.r }))
-  const minY = Math.min.apply(null, islands.map(function (island) { return island.y - island.r }))
-  const maxY = Math.max.apply(null, islands.map(function (island) { return island.y + island.r }))
-  const scale = Math.min((width - 72) / (maxX - minX), usableHeight / (maxY - minY))
-  function fit(point) {
-    point.x = width / 2 + (point.x - (minX + maxX) / 2) * scale
-    point.y = top + usableHeight / 2 + (point.y - (minY + maxY) / 2) * scale
-    point.r *= scale
+    edges.forEach(function (edge) {
+      const a = byId[String(edge.source)], b = byId[String(edge.target)]
+      if (!a || !b) return
+      const dx = b.x - a.x, dy = b.y - a.y
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1
+      const target = 150 + (a.r + b.r) * 0.6
+      const pull = (dist - target) * 0.012
+      const fx = dx / dist * pull, fy = dy / dist * pull
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy
+    })
+    ids.forEach(function (id) {
+      const it = byId[id]
+      it.vx += (cx - it.x) * 0.00024
+      it.vy += (cy - it.y) * 0.00024
+      it.vx *= 0.7; it.vy *= 0.7
+      it.x += it.vx * (0.6 + cooling * 0.7)
+      it.y += it.vy * (0.6 + cooling * 0.7)
+      const m = it.r + 26
+      it.x = Math.max(m, Math.min(width - m, it.x))
+      it.y = Math.max(m, Math.min(height - m, it.y))
+    })
   }
-  Object.keys(positions).forEach(function (id) { fit(positions[id]) })
-  islands.forEach(fit)
-  return { positions: positions, islands: islands }
+  for (let pass = 0; pass < 18; pass += 1) {
+    const ids = Object.keys(byId)
+    for (let i = 0; i < ids.length; i += 1) {
+      const a = byId[ids[i]]
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const b = byId[ids[j]]
+        let dx = b.x - a.x, dy = b.y - a.y
+        let dist = Math.sqrt(dx * dx + dy * dy)
+        if (dist < 0.01) { dx = ((i + 7) * 11) % 9 - 4; dy = ((j + 3) * 13) % 9 - 4; dist = Math.sqrt(dx * dx + dy * dy) || 1 }
+        const min = a.r + b.r + 22
+        if (dist >= min) continue
+        const shift = (min - dist) * 0.5
+        const sx = dx / dist * shift, sy = dy / dist * shift
+        a.x -= sx; a.y -= sy; b.x += sx; b.y += sy
+      }
+    }
+  }
+  return out
 }
 
 function KnowledgeDetail(props) {
@@ -778,143 +666,27 @@ function KnowledgeView(props) {
 }
 
 function GraphView(props) {
+  const W = 1000, H = 620
   const [library, setLibrary] = React.useState('')
+  const [info, setInfo] = React.useState(null)
   const [detailId, setDetailId] = React.useState(null)
-  const [fullscreen, setFullscreen] = React.useState(false)
-  const [size, setSize] = React.useState({ width: 1080, height: 800 })
   const [hover, setHover] = React.useState(null)
-  const [selNode, setSelNode] = React.useState(null)
-  const [tf, setTf] = React.useState({ k: 0.27, x: 0, y: 0 })
+  const [tf, setTf] = React.useState({ k: 1, x: 0, y: 0 })
   const [overrides, setOverrides] = React.useState({})
   const [seed, setSeed] = React.useState(0)
-  const rootRef = React.useRef(null)
-  const fullscreenButton = React.useRef(null)
-  const lastNode = React.useRef(null)
   const svgRef = React.useRef(null)
   const gesture = React.useRef(null)
   const resource = useResource(async function () {
     const res = await api('/graph' + qs({ workspace_id: props.workspaceId, library: library }))
-    const graph = res && (res.graph || res) || {}
-    const unique = new Map()
-    list(graph.nodes).forEach(function (node) { if (node && node.id != null) unique.set(String(node.id), node) })
-    return { nodes: Array.from(unique.values()), edges: list(graph.edges).filter(function (edge) {
-      return edge && unique.has(String(edge.source)) && unique.has(String(edge.target))
-    }) }
+    const graph = res && res.graph || {}
+    return { nodes: list(graph.nodes), edges: list(graph.edges) }
   }, [props.workspaceId, library])
   const nodes = resource.data ? resource.data.nodes : []
   const edges = resource.data ? resource.data.edges : []
-  // 无限画布：世界坐标系（WORLD_W×WORLD_H，节点铺开不压缩），SVG viewBox 即世界，
-  // <g transform> 缩放平移让视窗显示任意区域（k/x/y 由用户滚轮/拖拽控制）。
-  const WORLD_W = 4000, WORLD_H = 3000
-  const W = WORLD_W, H = WORLD_H
-  const communities = React.useMemo(function () { return buildGraphThemes(nodes, edges) }, [resource.data])
-  const layout = React.useMemo(function () {
-    return buildGraphLayout(nodes, edges, WORLD_W, WORLD_H, seed, communities,
-      fullscreen ? { top: 140, bottom: 120 } : null)
-  }, [communities, seed, fullscreen])
-  function fitContent() {
-    // 自动 fit 到节点包围盒并居中放大（视窗有限、画布无限）。tf 平移在 viewBox
-    // 用户坐标系里，而 CSS 视口经 xMidYMid meet letterbox 映射：可见区中心恒为
-    // (W/2, H/2)，可见区用户尺寸 = 视口像素 ÷ 映射比例，并截断到 viewBox 范围。
-    const positions = layout.positions || {}
-    const ids = Object.keys(positions)
-    if (!ids.length) { setTf({ k: 0.27, x: W / 2, y: H / 2 }); return }
-    const svg = svgRef.current
-    const rect = svg ? svg.getBoundingClientRect() : null
-    const vpW = (rect && rect.width) || size.width || 1080
-    const vpH = (rect && rect.height) || size.height || 800
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    ids.forEach(function (id) {
-      const p = positions[id]; if (!p) return
-      const r = (p.r || 9) + 12
-      if (p.x - r < minX) minX = p.x - r
-      if (p.y - r < minY) minY = p.y - r
-      if (p.x + r > maxX) maxX = p.x + r
-      if (p.y + r > maxY) maxY = p.y + r
-    })
-    const bboxW = Math.max(1, maxX - minX), bboxH = Math.max(1, maxY - minY)
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
-    const pxPerUnit = Math.min(vpW / W, vpH / H) || 0.27
-    const visibleW = Math.min(W, vpW / pxPerUnit), visibleH = Math.min(H, vpH / pxPerUnit)
-    const k = Math.max(0.12, Math.min(8, Math.min(visibleW / bboxW, visibleH / bboxH) * 0.88))
-    const x = W / 2 - cx * k
-    const y = H / 2 - cy * k
-    setTf({ k: k, x: x, y: y })
-  }
+  const layout = React.useMemo(function () { return buildGraphLayout(nodes, edges, W, H, seed) }, [resource.data, seed])
   React.useEffect(function () {
-    setDetailId(null); setHover(null); setOverrides({}); gesture.current = null
+    setInfo(null); setHover(null); setOverrides({}); setTf({ k: 1, x: 0, y: 0 }); gesture.current = null
   }, [resource.data])
-  React.useEffect(function () {
-    const svg = svgRef.current
-    if (!svg) return
-    function measure() {
-      const rect = svg.getBoundingClientRect()
-      if (!rect.width || !rect.height) return
-      const width = Math.round(rect.width), height = Math.round(rect.height)
-      setSize(function (previous) { return previous.width === width && previous.height === height ? previous : { width: width, height: height } })
-    }
-    measure()
-    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
-    if (observer) observer.observe(svg)
-    window.addEventListener('resize', measure)
-    return function () { if (observer) observer.disconnect(); window.removeEventListener('resize', measure) }
-  }, [])
-  React.useEffect(function () {
-    setOverrides({}); gesture.current = null
-    fitContent()
-  }, [W, H, fullscreen, layout])
-  React.useEffect(function () {
-    const root = rootRef.current
-    function changed() { setFullscreen(document.fullscreenElement === root) }
-    document.addEventListener('fullscreenchange', changed)
-    return function () {
-      document.removeEventListener('fullscreenchange', changed)
-      if (document.fullscreenElement === root && document.exitFullscreen) document.exitFullscreen().catch(function () {})
-    }
-  }, [])
-  React.useEffect(function () {
-    if (!fullscreen) return
-    const overflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    function escape(event) {
-      if (event.key !== 'Escape') return
-      event.preventDefault(); event.stopPropagation()
-      exitFullscreen()
-    }
-    document.addEventListener('keydown', escape, true)
-    return function () { document.body.style.overflow = overflow; document.removeEventListener('keydown', escape, true) }
-  }, [fullscreen])
-
-  function exitFullscreen() {
-    if (document.fullscreenElement === rootRef.current && document.exitFullscreen) {
-      document.exitFullscreen().catch(function () {})
-    } else setFullscreen(false)
-    if (fullscreenButton.current) fullscreenButton.current.focus()
-  }
-
-  async function toggleFullscreen() {
-    if (fullscreen) { exitFullscreen(); return }
-    const root = rootRef.current
-    if (root && root.requestFullscreen) {
-      try { await root.requestFullscreen(); return } catch (error) { /* Embedded hosts may disable the native fullscreen API. */ }
-    }
-    setFullscreen(true)
-  }
-
-  function openDetail(node) {
-    lastNode.current = String(node.id)
-    setHover(null); setDetailId(node.id)
-  }
-
-  function backToGraph() {
-    setDetailId(null)
-    window.requestAnimationFrame(function () {
-      const svg = svgRef.current
-      if (!svg) return
-      const node = Array.from(svg.querySelectorAll('[data-node-id]')).find(function (element) { return element.dataset.nodeId === lastNode.current })
-      if (node) node.focus({ preventScroll: true })
-    })
-  }
 
   // getScreenCTM includes SVG letterboxing, unlike independent width/height ratios.
   function pointInSvg(event) {
@@ -942,9 +714,9 @@ function GraphView(props) {
     }
     svg.addEventListener('wheel', wheel, { passive: false })
     return function () { svg.removeEventListener('wheel', wheel) }
-  }, [detailId, H])
+  }, [detailId])
 
-  function pos(id) { return overrides[String(id)] || layout.positions[String(id)] }
+  function pos(id) { return overrides[String(id)] || layout[String(id)] }
 
   function start(event, node) {
     if (event.button !== 0 || gesture.current) return
@@ -970,7 +742,7 @@ function GraphView(props) {
     if (drag.node) {
       setOverrides(function (previous) {
         return Object.assign({}, previous, { [String(drag.node.id)]: {
-          id: String(drag.node.id), r: layout.positions[String(drag.node.id)].r, x: drag.x + dx / drag.k, y: drag.y + dy / drag.k,
+          id: String(drag.node.id), r: layout[String(drag.node.id)].r, x: drag.x + dx / drag.k, y: drag.y + dy / drag.k,
         } })
       })
     } else setTf({ k: drag.k, x: drag.x + dx, y: drag.y + dy })
@@ -979,20 +751,20 @@ function GraphView(props) {
   function finish(event, cancelled) {
     const drag = gesture.current
     if (!drag || drag.pointerId !== event.pointerId) return
+    if (!cancelled && !drag.moved) setInfo(drag.node)
     gesture.current = null
     const svg = svgRef.current
     if (svg && svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId)
-    if (!cancelled && !drag.moved && drag.node) openDetail(drag.node)
   }
 
   function zoom(factor) {
     setTf(function (previous) {
-      const k = Math.max(0.12, Math.min(8, previous.k * factor))
+      const k = Math.max(0.35, Math.min(6, previous.k * factor))
       return { k: k, x: W / 2 - (W / 2 - previous.x) * k / previous.k, y: H / 2 - (H / 2 - previous.y) * k / previous.k }
     })
   }
 
-  function reset() { setOverrides({}); setSeed(function (value) { return value + 1 }) }
+  function reset() { setTf({ k: 1, x: 0, y: 0 }); setOverrides({}); setSeed(function (value) { return value + 1 }) }
   const neighbors = new Set(hover == null ? [] : [hover])
   const degree = {}
   edges.forEach(function (edge) {
@@ -1011,9 +783,9 @@ function GraphView(props) {
       h(LibrarySelect, { value: library, onChange: setLibrary }),
       h(Button, { icon: 'refresh', title: '刷新图谱', onClick: resource.reload, disabled: resource.loading }),
       h(Button, { icon: 'reset', title: '重排并重置视图', onClick: reset, disabled: !nodes.length }),
-      h(Button, { icon: 'zoomOut', title: '缩小', onClick: function () { zoom(1 / 1.25) }, disabled: tf.k <= 0.12 }),
+      h(Button, { icon: 'zoomOut', title: '缩小', onClick: function () { zoom(1 / 1.25) }, disabled: tf.k <= 0.35 }),
       h('span', { className: 'dsh-lit-mini', style: { minWidth: 44, justifyContent: 'center' } }, Math.round(tf.k * 100) + '%'),
-      h(Button, { icon: 'zoomIn', title: '放大', onClick: function () { zoom(1.25) }, disabled: tf.k >= 8 }),
+      h(Button, { icon: 'zoomIn', title: '放大', onClick: function () { zoom(1.25) }, disabled: tf.k >= 6 }),
       h('span', { className: 'dsh-lit-count' }, nodes.length + ' 节点 · ' + edges.length + ' 关系')),
     h(Notice, { text: resource.error, error: true, retry: resource.reload }),
     h('div', { className: 'dsh-lit-graph-legend', 'aria-label': '知识库图例' },
@@ -1022,7 +794,7 @@ function GraphView(props) {
           h('i', { className: 'dsh-lit-graph-dot', style: { background: libraryColor(library) }, 'aria-hidden': true }),
           (LIB_LABEL[library] || '未分类') + ' ' + (counts[library] || 0))
       })),
-    h('div', { className: 'dsh-lit-graphbox' + (selNode ? ' dsh-lit-graphbox-selected' : '') },
+    h('div', { className: 'dsh-lit-graphbox' + (info ? ' dsh-lit-graphbox-selected' : '') },
       h('div', { className: 'dsh-lit-graph-stage' },
         h('svg', {
           ref: svgRef, className: 'dsh-lit-graph-svg', viewBox: '0 0 ' + W + ' ' + H, role: 'group', 'aria-label': '知识概念关系图',
@@ -1041,18 +813,17 @@ function GraphView(props) {
           nodes.map(function (node) {
             const point = pos(node.id)
             if (!point) return null
-            const selected = selNode && String(selNode.id) === String(node.id)
+            const selected = info && String(info.id) === String(node.id)
             const hot = hover === String(node.id) || selected
             return h('g', {
               key: 'n' + node.id, className: 'dsh-lit-graph-node', 'data-node-id': String(node.id),
               tabIndex: 0, role: 'button', 'aria-label': node.concept || String(node.id), 'aria-pressed': !!selected,
               opacity: hover != null && !neighbors.has(String(node.id)) ? 0.25 : 1,
               onPointerDown: function (event) { start(event, node) },
-              onClick: function () { setSelNode(node) },
               onPointerEnter: function () { setHover(String(node.id)) }, onPointerLeave: function () { setHover(null) },
               onFocus: function () { setHover(String(node.id)) }, onBlur: function () { setHover(null) },
               onKeyDown: function (event) {
-                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelNode(node) }
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setInfo(node) }
               },
             },
               h('title', null, (node.concept || node.id) + ' · ' + (LIB_LABEL[node.library] || '未分类') + ' · ' + (degree[String(node.id)] || 0) + ' 关系'),
@@ -1062,15 +833,15 @@ function GraphView(props) {
           }))),
         resource.loading || !nodes.length ? h('div', { className: 'dsh-lit-graph-overlay', role: 'status' },
           resource.loading ? '加载图谱…' : resource.error ? '图谱加载失败' : '暂无匹配的图谱节点') : null),
-      selNode ? h('aside', { className: 'dsh-lit-side', 'aria-label': '节点详情' },
+      info ? h('aside', { className: 'dsh-lit-side', 'aria-label': '节点详情' },
         h('div', { className: 'dsh-lit-actions' },
-          h('span', { className: 'dsh-lit-title dsh-lit-content' }, '知识 #' + selNode.id),
-          h(Button, { icon: 'close', title: '关闭节点详情', onClick: function () { setSelNode(null) } })),
-        h('h2', { className: 'dsh-lit-heading' }, selNode.concept || '无概念名'),
-        h('div', null, libraryChip(selNode.library)),
-        selNode.summary ? h('p', { className: 'dsh-lit-text' }, selNode.summary) : null,
-        h(KV, { rows: [['关联关系', degree[String(selNode.id)] || 0]] }),
-        h(Button, { icon: 'open', className: 'dsh-lit-btn-primary', onClick: function () { setDetailId(selNode.id) } }, '知识详情')) : null))
+          h('span', { className: 'dsh-lit-title dsh-lit-content' }, '知识 #' + info.id),
+          h(Button, { icon: 'close', title: '关闭节点详情', onClick: function () { setInfo(null) } })),
+        h('h2', { className: 'dsh-lit-heading' }, info.concept || '无概念名'),
+        h('div', null, libraryChip(info.library)),
+        info.summary ? h('p', { className: 'dsh-lit-text' }, info.summary) : null,
+        h(KV, { rows: [['关联关系', degree[String(info.id)] || 0]] }),
+        h(Button, { icon: 'open', className: 'dsh-lit-btn-primary', onClick: function () { setDetailId(info.id) } }, '知识详情')) : null))
 }
 
 function StatusView(props) {
@@ -1179,13 +950,6 @@ function PanelBody(props) {
     select(TABS[next].id)
     tabRefs.current[next].focus()
   }
-  const shellItems = list(props.shellWorkspaces)
-  function wsLabel(id) {
-    const server = wsOptions.find(function (w) { return String(w.workspace_id) === String(id) })
-    const shell = shellItems.find(function (w) { return String(w.workspaceId || w.id || '') === String(id) })
-    const title = String((shell && (shell.title || shell.name)) || (server && server.title) || id || '')
-    return server ? title + ' (' + Number(server.knowledge || 0) + ')' : title
-  }
   return h('div', { className: 'dsh-lit-panel', 'data-dsh-style': 'deepmemory-tokens-v2' },
     h('header', { className: 'dsh-lit-topbar' },
       h('h1', { className: 'dsh-lit-brand' }, '📚 literature 文献知识库'),
@@ -1193,9 +957,9 @@ function PanelBody(props) {
         className: 'dsh-lit-select', 'aria-label': '选择工作区',
         value: workspace, onChange: function (event) { switchWorkspace(event.target.value) },
       }, [
-        h('option', { key: 'cur', value: workspace }, wsLabel(workspace)),
+        h('option', { key: 'cur', value: workspace }, workspace),
         wsOptions.filter(function (w) { return w.workspace_id !== workspace }).map(function (w) {
-          return h('option', { key: w.workspace_id, value: w.workspace_id }, wsLabel(w.workspace_id))
+          return h('option', { key: w.workspace_id, value: w.workspace_id }, w.workspace_id + (w.knowledge ? ' (' + w.knowledge + ')' : ' (0)'))
         }),
       ]),
       h('span', { className: 'dsh-lit-ws', title: '当前会话工作区' }, '会话: ' + props.workspaceId)),
@@ -1218,10 +982,8 @@ function PanelBody(props) {
 }
 
 function LiteraturePanel(props) {
-  const sessions = useShellSnapshot(shellServices.sessions, { current: undefined })
-  const workspaces = useShellSnapshot(shellServices.workspaces, { items: [] })
-  const workspaceId = resolveWorkspaceId(props, sessions, workspaces)
-  return h(PanelBody, { key: workspaceId, workspaceId: workspaceId, shellWorkspaces: workspaces.items || [] })
+  const workspaceId = resolveWorkspaceId(props)
+  return h(PanelBody, { key: workspaceId, workspaceId: workspaceId })
 }
 
 function ConfigView() {
@@ -1311,10 +1073,6 @@ function ConfigView() {
 function apply(ctx) {
   const slots = ctx.get('slots')
   if (!slots) return
-  const sessionService = ctx.get('sessions')
-  const workspaceService = ctx.get('workspaces')
-  if (sessionService) shellServices.sessions = sessionService
-  if (workspaceService) shellServices.workspaces = workspaceService
   let style = document.head.querySelector('style[data-plugin="dsh-literature"]')
   if (!style) {
     style = document.createElement('style')

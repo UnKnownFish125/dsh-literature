@@ -819,11 +819,11 @@ class LiteratumStore:
         return [dict(r) for r in rows]
 
     def list_workspaces(self):
-        """列出全部宿主工作区（含空区，供工作区下拉）。知识计数按库聚合；附 DSH 友好名 title。"""
+        """列出全部宿主工作区（含空区，供工作区下拉）。知识计数：非 bias 且未归档（bias 为全局约束，不计入）。"""
         with self._connect() as conn:
             counts = dict(conn.execute(
                 "SELECT workspace_id, COUNT(*) AS c FROM knowledge_items"
-                " WHERE deleted_at IS NULL GROUP BY workspace_id").fetchall())
+                " WHERE deleted_at IS NULL AND archived=0 AND library<>'bias' GROUP BY workspace_id").fetchall())
         host_ws = {}
         try:
             import json as _json

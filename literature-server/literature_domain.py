@@ -798,11 +798,12 @@ class LiteratumStore:
         return cur.rowcount
 
     def list_knowledge(self, workspace_id="", library=None, archived=False, k=100):
-        """列出 knowledge_items（供 browse/归档枚举）。"""
+        """列出 knowledge_items（供 browse/归档枚举）。
+        bias 为全局共享：library='bias' 豁免 workspace 过滤（任何工作区可见全部 bias）。"""
         with self._connect() as conn:
             sql = "SELECT * FROM knowledge_items WHERE deleted_at IS NULL"
             args = []
-            if workspace_id:
+            if workspace_id and library != "bias":
                 sql += " AND workspace_id=?"
                 args.append(workspace_id)
             if library:
@@ -851,13 +852,19 @@ class LiteratumStore:
 
     def count_knowledge(self, workspace_id=""):
         with self._connect() as conn:
-            sql = "SELECT COUNT(*) AS c FROM knowledge_items WHERE deleted_at IS NULL AND archived=0"
+            # 非 bias 按 workspace；bias 全局（豁免 ws，任何工作区都计入全部 bias）
+            sql = ("SELECT COUNT(*) AS c FROM knowledge_items"
+                   " WHERE deleted_at IS NULL AND archived=0 AND (library<>'bias' OR library IS NULL)")
             args = []
             if workspace_id:
                 sql += " AND workspace_id=?"
                 args.append(workspace_id)
             row = conn.execute(sql, args).fetchone()
-        return row["c"] if row else 0
+            base = row["c"] if row else 0
+            bias_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM knowledge_items WHERE deleted_at IS NULL AND archived=0 AND library='bias'"
+            ).fetchone()
+        return base + (bias_row["c"] if bias_row else 0)
 
     def ingest_memory_archive(self, memories):
         """deepmemory export-archive 结果 → memory_archive 原料归档层（幂等：按 memory_id 去重）。"""
@@ -1135,12 +1142,13 @@ class LiteratumStore:
     # ------------------------------------------------------------ graph
 
     def graph(self, workspace_id="", library=None):
-        """概念网络：nodes = knowledge_items, edges = knowledge_relations（workspace/library 过滤，library 可选）。"""
+        """概念网络：nodes = knowledge_items, edges = knowledge_relations（workspace/library 过滤，library 可选）。
+        bias 全局：节点查询豁免 ws（任意工作区 node 恒含全部 bias）。"""
         with self._connect() as conn:
             node_sql = "SELECT id, concept, library FROM knowledge_items WHERE deleted_at IS NULL"
             node_args = []
             if workspace_id:
-                node_sql += " AND workspace_id=?"
+                node_sql += " AND (workspace_id=? OR library='bias')"
                 node_args.append(workspace_id)
             if library:
                 node_sql += " AND library=?"

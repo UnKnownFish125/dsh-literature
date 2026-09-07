@@ -1,38 +1,48 @@
-# dsh-literature — 文献 · 证据 · 知识管理插件
+# dsh-literature — 完整知识库与归档体系
 
-给 DeepSeek Harness 的「文献管理器 + 证据库 + 书本知识库」三合一独立插件。
-管理论文/PDF/引用，维护「主张—证据—论文」的论证链，把书本阅读沉淀成可检索的知识网络。
+DeepSeek Harness 的 **知识库 + 归档中枢**插件：管理「原料 → 归档 → 加工 → 知识」全生命周期，
+与 deepmemory 专属对接（deepmemory 是原料来源之一，literature 是知识的组织者）。
 
-> 定位：**独立插件**（deepmemory 派生，但不并入 dsh-deepmemory）。
+> 定位：独立插件（deepmemory 派生，不并入 dsh-deepmemory）。
 > 复用 deepmemory 的部署/鉴权/代理范式，存储与 API 完全独立（独立 sqlite、独立端口 6260）。
 
 ---
 
-## 核心模型
+## 分层体系（v0.3+）
 
 ```
-Document（文献/书本，统一实体）
- ├─ type: paper | book | report | web
- ├─ metadata: title/authors/year/journal/DOI/ISBN/url
- ├─ attachment: PDF/EPUB 路径（可选）+ sha256
- ├─ read_status / lifecycle_status
- └─ sections: 章节/页面锚点（供证据溯源）
+原料层（收）
+ ├─ 文献/文档（import bibtex/doi/附件）
+ └─ deepmemory 专属对接（export-archive → 记忆+原始对话作为原料）
 
-Evidence（证据，从文献可定位处提取）
- ├─ claim / stance (supporting|contradicting|contextual)
- ├─ evidence_text（带文献+章节定位）
- └─ mapped_document → Document
+归档层（存原文，不向量化，可溯源）
+ ├─ memory_archive（deepmemory 原料归档：memory_id 溯源锚点 + sources 脱敏原文）
+ └─ documents / evidence（文献原文 + 证据，位置可配置 archive.dir）
 
-KnowledgeItem（知识条目，书本/多文献形成）
- ├─ concept（概念名，如"认知负荷"）
- ├─ summary / notes
- ├─ relations: [KnowledgeItem.id → KnowledgeItem.id, 关系词]（概念网络边）
- └─ sources: [Evidence.id...]（溯源）
+加工层（夜间）
+ ├─ literature_nightly.py（deepseek 低谷价 + flash-0731 经 uuapi）
+ └─ raw → knowledge（带 source_memory_id 溯源，可读的中文提炼）
+
+知识库（检索）
+ ├─ knowledge_items（concept/summary/notes + 批注/使用次数/评分）
+ ├─ categories（分类树，动态可配置深度；bias=global 全局，其余按工作区）
+ ├─ parent_id / node_depth / node_kind（知识内部父子层级）
+ ├─ knowledge_relations（关系边：相关/影响 等）
+ └─ FAISS jina 768 维向量（独立索引，语义检索 RRF 融合 FTS）
 ```
 
-**派生链**：`Document →(提取)→ Evidence →(归纳)→ KnowledgeItem →(关联)→ 概念网络`
+**派生链**：`原料(记忆/文献) → 归档(原文+锚点) → 加工(夜间LLM) → 知识(树+向量) → 检索(RRF)`
 
-全部实体支持**软删**（`deleted_at`），**workspace_id 硬过滤**（联结表经两端推导，跨工作区数据绝不串扰）。
+---
+
+## 工作区与全局约束
+
+| 维度 | 规则 |
+|---|---|
+| **知识** | 按 `workspace_id` **隔离**（各工作区只见自己知识）；读写按 ID 均校验（跨区 403/404） |
+| **bias** | **全局行为约束库**（v0.3 裁决 15）：任何工作区可见全部 bias，**不计入知识条数统计** |
+| **统计** | `count/workspaces` 只算**非 bias 且未归档**知识 |
+| **跨区访问** | 默认隔离 + 许可制 ACL（`resource_acl`，一期只读 viewer，见 `docs/dsh-literature-acl-v05.md`） |
 
 ---
 
@@ -41,117 +51,78 @@ KnowledgeItem（知识条目，书本/多文献形成）
 ```
 DSH Web (client.js) ──/lit-api──> Host (index.js, prefix 代理, Bearer token)
                                        │
-                 literatum_server.py (6260, sqlite + FTS + 附件落盘 + 鉴权)
+           literature_server.py (6260, sqlite + FTS + FAISS + 附件 + 鉴权)
                                        │
-                  literatum_domain.py（域模型 + CRUD + 图谱 + 导入导出 + 去重）
+            literature_domain.py（域模型 + CRUD + 图谱 + 分类树 + 隔离）
+                                       │
+         literature_upstream.py（deepmemory 上游只读，6260 供 kb 查询）
 ```
 
 | 组件 | 路径 | 说明 |
 |---|---|---|
-| 服务端 | `literatum-server/literatum_server.py` | HTTP 路由（21 个端点），鉴权沿用 deepmemory（api-token + Bearer + 拒 Origin） |
-| 域层 | `literatum-server/literatum_domain.py` | 模型/CRUD/软删/图谱/导入导出/去重/附件登记，独立 sqlite |
-| Web 插件 | `web-plugin/` | `/lit-api` 全量代理 + 文献库 UI + 插件配置页（设置→插件→插件配置） |
-| Agent 工具 | `agent-preset/literatum-plugin/plugin-v1.js` | `literatum_add` / `literatum_search` / `literatum_attach` / `literatum_link_evidence` |
-| 契约 | `docs/dsh-literatum-contract.md` | contract-v0.2（冻结接口，多子代理开发依据） |
+| 服务端 | `literature-server/literature_server.py` | HTTP 路由（kb/query、kb-search、documents、knowledge、categories、graph、archive-ingest/count、attachments 签名下载） |
+| 域层 | `literature-server/literature_domain.py` | 模型/CRUD/软删/图谱/分类树/树状知识/工作区隔离/bias 全局 |
+| 向量 | `literature-server/literature_vectors.py` | FAISS jina 768 维（IndexFlatIP+IndexIDMap） |
+| 夜间加工 | `literature-server/literature_nightly.py` | raw→knowledge（flash-0731，低谷价） |
+| 原料 ingest | `literature-server/literature_ingest.py` | deepmemory export-archive → memory_archive（幂等去重） |
+| 自动关系 | `literature-server/literature_relations.py` | 向量相似度 → knowledge_relations 边（岛群图谱数据基础） |
+| 文件爬取 | `literature-server/literature_upstream.py` | deepmemory 上游只读共享层 |
+| Web 插件 | `web-plugin/`（client.js 四视图 + /lit-api 代理） | 文档/知识/图谱/状况 + 配置页 |
+| Agent 工具 | `agent-preset/kb-plugin/plugin-v1.js` | kb_query/browse/constraints/contracts/graph/archive_library |
 
 ### 技术栈
-
-- **Python**：标准库 `sqlite3` + `http.server`（无第三方框架）；FTS5 trigram 中文分词
-- **Node**：`@deepseek-ai/schemastery`、`@deepseek-ai/dsh-settings`（web 插件）
-- 附件存储：`<deploy>/data/attachments/`；取回用 HMAC 短期签名 token（5 分钟）
+- **Python**：标准库 `sqlite3` + `http.server`；FTS5 trigram；FAISS（向量）
+- **Node**：`@deepseek-ai/*`（web 插件）；CJS + React.createElement（无 JSX）
+- 附件存储：`data/attachments/`；HMAC 签名 token（5 分钟 TTL）；附件路由仅凭签名（window.open 可用）
 
 ---
 
-## API 概览（`/v1/literatum/*`，经 `/lit-api` 代理）
+## API 概览（`/v1/literature/*`，经 `/lit-api`）
 
 | 方法/路径 | 行为 |
 |---|---|
-| `POST /documents` / `GET /documents?q=&workspace_id=` / `GET /documents/<id>` / `PATCH` / `DELETE` | 文献 CRUD（FTS 检索 + workspace 硬过滤） |
-| `POST /evidence` / `GET/PATCH/DELETE /evidence/<id>` / `POST /claims?q=` | 证据 CRUD + 同一主张聚合（support/contradict） |
-| `POST /knowledge` / `GET/PATCH/DELETE /knowledge/<id>` / `GET /graph?workspace_id=` | 知识条目 CRUD + 概念网络（id 对口径） |
-| `POST /import/bibtex` / `POST /import/doi` / `POST /dedupe` / `GET /export/bibtex` | 导入（BibTeX/Crossref DOI）+ 精确去重 + 导出 |
-| `POST /attachments` / `GET /attachments/<file>?t=` | 附件上传（multipart）+ 签名取回 |
+| `POST /documents` / `GET /documents?q=&workspace_id=` / `GET/PATCH/DELETE /documents/<id>` | 文献 CRUD（FTS 检索 + workspace 硬过滤） |
+| `POST /evidence` / `GET/PATCH/DELETE /evidence/<id>` | 证据 CRUD（含 zh_content 中文对照） |
+| `POST /knowledge` / `GET/PATCH/DELETE /knowledge/<id>` | 知识 CRUD（含 annotation/use_count/rating + 树字段） |
+| `GET /knowledge/<id>/subtree` | 知识子树（递归 CTE） |
+| `POST /knowledge/<id>/use` / `/rate` | 使用次数 / 评分 |
+| `GET /categories` / `POST /categories` / `PATCH/DELETE /categories/<id>` / `GET /categories/<id>/subtree` | 分类树 CRUD + 子树 |
+| `GET /kb-search` / `POST /kb/query` | 语义检索 / N3 hybrid（本地知识+deepmemory RRF） |
+| `GET /kb/browse` / `constraints` / `contracts` / `graph` | deepmemory 目录 / bias 全局约束 / 契约 / 上游图谱 |
+| `GET /knowledge-browse` / `knowledge-count` / `workspaces` | 本地知识枚举（含归档）/ 计数（排除 bias）/ 宿主工作区（含 title） |
+| `POST /archive-ingest` / `GET /archive-count` / `archive-memories` | 原料归档 ingest/枚举/计数 |
+| `POST /archive-library` | 库级归档（要求 workspace_id，bias 拒归档） |
+| `POST /attachments` / `GET /attachments/<file>?t=` | 附件上传 / 签名取回（仅凭签名） |
+| `GET /documents/<id>/attachment-url` | 生成签名下载 URL |
+| `GET /graph?workspace_id=&library=` | 知识图谱（library 过滤 + bias 全局节点） |
 | `GET /config-schema` / `GET|POST /config` | 插件配置页数据源 |
-
-### 鉴权
-
-- 服务端：`data/api-token`（首次启动自动生成）；`Authorization: Bearer <token>`，缺失/不匹配 401；带 `Origin` 头 403；根路径 404
-- Host 代理：从 `LITERATUM_API_TOKEN_FILE` env / `$DSH_HOME/.dsh-literatum-api-token` 读取并附加
 
 ---
 
 ## 安装与部署
 
-### 测试机先行（B 阶段）
-
+### 生产（6260 单服务）
 ```bash
-# B0: 建目录 + 复制服务端
-mkdir -p /www/dsh-test-literatum
-cp literatum-server/{literatum_domain.py,literatum_server.py} /www/dsh-test-literatum/
-
-# B1: systemd（测试机 6261）
-cat > /etc/systemd/system/dsh-test-literatum.service << 'EOF'
-[Service]
-Type=simple
-WorkingDirectory=/www/dsh-test-literatum
-Environment=HOME=/root
-Environment=LITERATUM_SERVER_PORT=6261
-ExecStart=/opt/AstrBot/venv/bin/python3 /www/dsh-test-literatum/literatum_server.py
-Restart=on-failure
-EOF
-systemctl daemon-reload && systemctl enable --now dsh-test-literatum.service
-
-# B3: 验证
-TOKEN=$(cat /www/dsh-test-literatum/data/api-token)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:6261/v1/literatum/documents
+mkdir -p /www/dsh-literature-deploy/literature-server
+cp literature-server/*.py /www/dsh-literature-deploy/literature-server/
+# systemd dsh-literature.service，LITERATURE_SERVER_PORT=6260
+#   LITERATURE_MEMORY_URL=6230（deepmemory 上游） + LITERATURE_MEMORY_API_TOKEN_FILE
+# web 插件 → vendored：
+#   /www/dsh/home/profiles/web/node_modules/.pnpm/dsh-literature@*/node_modules/dsh-literature/
 ```
 
-### 生产同步（A 阶段，B 全通过后）
+### 测试机（6263 隔离）
+`dsh-test-literature.service`，`LITERATURE_SERVER_PORT=6263`，上游 6240（deepmemory 测试）。
 
+### 验证
 ```bash
-mkdir -p /www/dsh-literatum-deploy/literatum-server
-cp literatum-server/{literatum_domain.py,literatum_server.py} /www/dsh-literatum-deploy/literatum-server/
-# systemd dsh-literatum.service，LITERATUM_SERVER_PORT=6260
-
-# web 插件 → 生产 home
-mkdir -p /www/dsh/home/profiles/web/node_modules/dsh-literatum
-cp web-plugin/{index.js,client.js,package.json,dsh.patch.yml} /www/dsh/home/profiles/web/node_modules/dsh-literatum/
-python3 scripts/fix-client-bundle.py /www/dsh/home/profiles/web/node_modules/dsh-literatum/client.js dsh-literatum
-
-# agent 工具
-mkdir -p /www/dsh/home/.agent-presets/_literatum-plugin
-cp agent-preset/literatum-plugin/plugin-v1.js /www/dsh/home/.agent-presets/_literatum-plugin/
-
-systemctl daemon-reload && systemctl restart dsh-literatum.service dsh-web.service
+TOKEN=$(cat data/api-token)
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:6260/v1/literature/knowledge-count?workspace_id=<host-ws>
 ```
-
-> 端口基线：生产 6260 / 测试机 6261；与 deepmemory（6230/6240）、task-board（6250）互不冲突。
-> 部署顺序严格「先测试机（B）→ 生产（A）」。
 
 ---
 
-## 测试
-
-```bash
-cd literatum-server
-python3 -m unittest tests.test_literatum -v   # 8 个测试：域层 + HTTP + 附件安全
-```
-
-覆盖：CRUD/软删、claims 聚合、图谱 2 节点 1 边、workspace 隔离、BibTeX 导入去重导出、附件上传/签名取回/坏 token/过期/路径穿越、鉴权 401/403/404。
-
----
-
-## 开发
-
-- 契约即接口：`docs/dsh-literatum-contract.md`（contract-v0.2，SA 间 frozen 接口）
-- 多子代理分工：SA-1 域层 → SA-2 服务 → SA-3 插件 → SA-4 图谱/检索增强
-- 派生参照：deepmemory `memory-server/server.py`（鉴权/路由模式）、`dsh-livetaskboard`（插件骨架）
-
-## 许可
-
-AGPL-3.0-only（与派生源 dsh-deepmemory 一致，见 [LICENSE](./LICENSE)）
-
-## 知识库查询（kb 体系）
-- `kb-server/`：知识查询服务（6262，代理 deepmemory 只读）
-- `agent-preset/kb-plugin/plugin-v1.js`：kb_query / kb_browse / kb_constraints / kb_contracts / kb_graph 五工具
-- 文档：`docs/dsh-literature-kb-dev-plan.md`（模型 v0.3 演进中）
+## 关键决策文档
+- `docs/dsh-literature-model-v03.md` — 分层体系 + 分类树 + 权限设计
+- `docs/dsh-literature-tree-knowledge-v04.md` — 树状知识（方案3：分类树 + 知识分层）
+- `docs/dsh-literature-acl-v05.md` — 跨工作区访问（默认隔离 + 许可 ACL）

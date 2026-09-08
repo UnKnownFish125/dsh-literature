@@ -26,9 +26,10 @@ def run(dry_run=False):
     store = LiteratumStore(DB_PATH)
     with store._connect() as conn:
         rows = conn.execute(
-            "SELECT id, concept, library FROM knowledge_items WHERE deleted_at IS NULL").fetchall()
+            "SELECT id, concept, library, workspace_id FROM knowledge_items WHERE deleted_at IS NULL").fetchall()
     ids = [r["id"] for r in rows]
     lib = {r["id"]: r["library"] for r in rows}
+    ws = {r["id"]: r["workspace_id"] for r in rows}   # 每条知识自身的归属（不写死）
     concept = {r["id"]: r["concept"] for r in rows}
     print(f"知识 {len(ids)} 条，开始向量建关系...")
 
@@ -58,7 +59,7 @@ def run(dry_run=False):
                     continue
                 conn.execute(
                     "INSERT INTO knowledge_relations (source_id, target_id, relation, workspace_id, updated_at)"
-                    " VALUES (?,?,?,?,?)", (kid, tid, RELATION, "deepseek-harness", now))
+                    " VALUES (?,?,?,?,?)", (kid, tid, RELATION, ws.get(kid, ""), now))
                 added += 1
     print(f"建关系边: {added} 条（跳过低于阈值 {skip} 次）")
     return added

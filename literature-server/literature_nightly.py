@@ -262,7 +262,9 @@ def run_once(store=None, doc_limit=20, dry_run=False):
         if r.get("knowledge_id"):
             out["knowledge_added"] += 1
     # 归档层加工：memory_archive raw → knowledge（v0.3 专属对接主通道）
-    arch_added = process_archive_batch(store, workspace_id="deepseek-harness", limit=doc_limit)
+    # 不传全局 workspace_id：每条归档按其自身 workspace_id 加工（process_archive_to_knowledge 读 archive_row）。
+    # 历史 bug：此处曾硬编码 "deepseek-harness"（假工作区），导致过滤不到真实归档、夜间空转。
+    arch_added = process_archive_batch(store, limit=doc_limit)
     out["archive_processed"] = arch_added
     out["knowledge_added"] += arch_added
     return out

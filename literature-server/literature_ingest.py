@@ -82,11 +82,14 @@ def ingest_to_literature(memories):
     return int(data.get("ingested") or 0)
 
 
-def run_once(since_days=1, workspace_id="deepseek-harness", limit=500, dry_run=False):
+def run_once(since_days=1, workspace_id="", limit=500, dry_run=False):
+    """拉 deepmemory 归档 → literature 原料层。
+    workspace_id 默认空 = 拉全部工作区（每条记忆自带 workspace_id，归档后各自归属）。
+    历史 bug：曾默认 "deepseek-harness"（假工作区），导致只拉/写进孤儿库。"""
     now = time.time()
     since = now - since_days * 86400
     mems = fetch_deepmemory_archive(since, workspace_id, limit)
-    print(f"deepmemory export-archive 拉取 {len(mems)} 条（since={since_days}天, ws={workspace_id}）")
+    print(f"deepmemory export-archive 拉取 {len(mems)} 条（since={since_days}天, ws={workspace_id or '全部'}）")
     if dry_run:
         return len(mems)
     add = ingest_to_literature(mems)
@@ -97,7 +100,8 @@ def run_once(since_days=1, workspace_id="deepseek-harness", limit=500, dry_run=F
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="deepmemory export-archive → literature 原料归档 ingest")
     ap.add_argument("--since-days", type=float, default=1, help="拉最近 N 天增量")
-    ap.add_argument("--workspace-id", default="deepseek-harness")
+    ap.add_argument("--workspace-id", default="",
+                    help="限定工作区（默认空=全部工作区，各条按自身 workspace_id 归属）")
     ap.add_argument("--limit", type=int, default=500)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()

@@ -33,7 +33,8 @@ export function apply(ctx) {
     try {
       const bias = await api('/kb-search', {
         method: 'POST',
-        body: { query: '约束 必须 禁止 绝对路径', k: 6, workspace_id: 'deepseek-harness', library: 'bias' },
+        // bias 为全局约束库（跨工作区共享），不传 workspace_id（服务端空 ws 返回全部 bias）
+        body: { query: '约束 必须 禁止 绝对路径', k: 6, library: 'bias' },
       }).catch(() => null)
       const rows = (bias && bias.results) || []
       if (!rows.length) return
@@ -51,7 +52,7 @@ export function apply(ctx) {
       query: { type: 'string', required: true, description: 'Concise search keywords.' },
       library: { type: 'string', description: 'bias | core | eco | project | runtime. Empty = all.' },
       k: { type: 'integer', description: 'Max results.', default: 5 },
-      workspace_id: { type: 'string', description: 'Workspace id.', default: 'deepseek-harness' },
+      workspace_id: { type: 'string', description: 'Workspace id（宿主工作区 UUID）。留空=不限；写入请按 DSH_SESSION_ID→workspace.json 解析，勿用兜底值。' },
       mode: { type: 'string', description: 'hybrid|knowledge-only|deepmemory-only|auto', default: 'auto' },
     },
     output: { schema: outSchema, render: textRender },

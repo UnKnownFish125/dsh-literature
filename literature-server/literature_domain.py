@@ -825,6 +825,7 @@ class LiteratumStore:
                 "SELECT workspace_id, COUNT(*) AS c FROM knowledge_items"
                 " WHERE deleted_at IS NULL AND archived=0 AND library<>'bias' GROUP BY workspace_id").fetchall())
         host_ws = {}
+        sessions_map = {}
         try:
             import json as _json
             wf = "/www/dsh/home/storages/workspace.json"
@@ -832,6 +833,8 @@ class LiteratumStore:
                 d = _json.load(open(wf, encoding="utf-8"))
                 tbl = d.get("tables", {}).get("workspaces", {})
                 host_ws = {k: (v.get("title") or k) for k, v in tbl.items()}
+                # sessionIds：供前端按 props.sessionId 解析当前会话所属工作区（不依赖前端 shell 服务）
+                sessions_map = {k: [str(x) for x in (v.get("sessionIds") or [])] for k, v in tbl.items()}
             # 补存在但记录缺失的 work spaces（防 title 空）
             for wid in list(counts):
                 host_ws.setdefault(wid, wid)
@@ -845,7 +848,8 @@ class LiteratumStore:
         result = []
         for wid in ids:
             result.append({"workspace_id": wid, "knowledge": counts.get(wid, 0),
-                           "title": host_ws.get(wid, wid)})
+                           "title": host_ws.get(wid, wid),
+                           "session_ids": sessions_map.get(wid, [])})
         # 有知识的优先排序
         result.sort(key=lambda w: (-w["knowledge"], w["title"]))
         return result

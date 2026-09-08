@@ -218,13 +218,20 @@ function useShellSnapshot(service, empty) {
   return snap
 }
 
-function resolveWorkspaceId(props, sessionsSnap, workspacesSnap) {
+function resolveWorkspaceId(props, sessionsSnap, workspacesSnap, serverWs) {
   const sid = props && props.sessionId ? String(props.sessionId)
     : sessionsSnap && sessionsSnap.current ? String(sessionsSnap.current) : ''
-  const current = sid ? list(workspacesSnap && workspacesSnap.items).find(function (workspace) {
+  if (!sid) return DEFAULT_WORKSPACE
+  // 优先：后端 /workspaces（含 session_ids，读宿主 workspace.json）——不依赖前端 shell 服务
+  const byServer = list(serverWs).find(function (w) {
+    return list(w && w.session_ids).map(String).indexOf(sid) >= 0
+  })
+  if (byServer && byServer.workspace_id) return String(byServer.workspace_id)
+  // 回退：前端 shell 快照（若宿主提供了 sessions/workspaces 服务）
+  const byShell = list(workspacesSnap && workspacesSnap.items).find(function (workspace) {
     return list(workspace.sessionIds).map(String).indexOf(sid) >= 0
-  }) : null
-  return current && (current.workspaceId || current.id) ? String(current.workspaceId || current.id) : DEFAULT_WORKSPACE
+  })
+  return byShell && (byShell.workspaceId || byShell.id) ? String(byShell.workspaceId || byShell.id) : DEFAULT_WORKSPACE
 }
 
 function Button(props) {
@@ -1220,7 +1227,14 @@ function PanelBody(props) {
 function LiteraturePanel(props) {
   const sessions = useShellSnapshot(shellServices.sessions, { current: undefined })
   const workspaces = useShellSnapshot(shellServices.workspaces, { items: [] })
-  const workspaceId = resolveWorkspaceId(props, sessions, workspaces)
+  // 后端工作区表（含 session_ids）：作为「当前会话 → 工作区」的权威解析源
+  const [serverWs, setServerWs] = React.useState(null)
+  React.useEffect(function () {
+    api('/workspaces').then(function (d) {
+      setServerWs((d && d.workspaces) || [])
+    }).catch(function () { setServerWs([]) })
+  }, [])
+  const workspaceId = resolveWorkspaceId(props, sessions, workspaces, serverWs)
   return h(PanelBody, { key: workspaceId, workspaceId: workspaceId, shellWorkspaces: workspaces.items || [] })
 }
 

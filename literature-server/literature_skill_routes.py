@@ -33,6 +33,8 @@ literature_skill_routes.py — skill 管理体系的 HTTP 路由层。
   GET    /v1/skill-events                    事件列表
 """
 
+import sys
+
 SKILL_HEADS = frozenset((
     "skills", "skill-versions", "skill-deployments", "skill-events", "skill-evaluations",
 ))
@@ -42,13 +44,22 @@ class _Unavailable(Exception):
     """对应模块尚未就位（部署/域逻辑仍在并行开发）。"""
 
 
+def _db_path(handler):
+    """从宿主 server 模块解析 DB 路径（不硬编码、不依赖 server 实例属性）。"""
+    mod = sys.modules.get(type(handler).__module__)
+    path = getattr(mod, "DB_PATH", None)
+    if not path:
+        raise _Unavailable("无法解析 literature DB 路径（宿主未暴露 DB_PATH）")
+    return path
+
+
 def _skill_store(handler):
     if getattr(handler, "_skill_store_cache", None) is None:
         try:
             from literature_skills import SkillStore
         except ImportError as exc:  # pragma: no cover - 依赖并行交付
             raise _Unavailable("literature_skills 模块未就位: %s" % exc) from None
-        handler._skill_store_cache = SkillStore(handler.server.db_path)
+        handler._skill_store_cache = SkillStore(_db_path(handler))
     return handler._skill_store_cache
 
 
@@ -58,7 +69,7 @@ def _event_store(handler):
             from literature_skill_events import SkillEventStore
         except ImportError as exc:  # pragma: no cover
             raise _Unavailable("literature_skill_events 模块未就位: %s" % exc) from None
-        handler._skill_event_cache = SkillEventStore(handler.server.db_path)
+        handler._skill_event_cache = SkillEventStore(_db_path(handler))
     return handler._skill_event_cache
 
 
@@ -68,10 +79,11 @@ def _deployer(handler):
             from literature_skill_deploy import SkillDeployer
         except ImportError as exc:  # pragma: no cover
             raise _Unavailable("literature_skill_deploy 模块未就位: %s" % exc) from None
-        cfg = getattr(handler.server, "skill_deploy_config", None)
+        mod = sys.modules.get(type(handler).__module__)
+        cfg = getattr(mod, "SKILL_DEPLOY_CONFIG", None)
         if not cfg:
-            raise _Unavailable("未配置 skill 部署目标（skill_deploy_config 为空）")
-        handler._skill_deployer_cache = SkillDeployer(handler.server.db_path, cfg)
+            raise _Unavailable("未配置 skill 部署目标（server.SKILL_DEPLOY_CONFIG 为空）")
+        handler._skill_deployer_cache = SkillDeployer(_db_path(handler), cfg)
     return handler._skill_deployer_cache
 
 
@@ -83,6 +95,14 @@ def _ws(body, qs, key="workspace_id"):
     if values:
         return str(values[0])
     return ""
+
+
+def _vid(value):
+    """路径参数转版本主键（int）。非法值交给域层抛 DomainError。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError("version_id must be a positive integer") from None
 
 
 def _body(handler):
@@ -100,7 +120,7 @@ def _error_status(exc):
         return 403
     if name in ("ConflictError",):
         return 409
-    if name in ("ValidationError", "DomainError", "DeploymentError"):
+    if name in ("ValidationError", "DomainError", "DeploymentError", "ValueError"):
         return 400
     return 500
 
@@ -192,7 +212,13 @@ def _skills(handler, method, rest, qs, body):
 def _versions(handler, method, rest, qs, body):
     if method == "GET" and len(rest) == 1:
         store = _skill_store(handler)
-        return handler._send(200, {"version": store.get_version(rest[0], _ws(None, qs))})
+        return handler._send(200, {"version": store.get_version(_vid(rest[0]), _ws(None, qs))})
+    if method == "POST" and len(rest) == 2 and rest[1] == "review":
+        payload = body if isinstance(body, dict) and body else _body(handler)
+        store = _skill_store(handler)
+        return handler._send(200, {"version": store.review_version(
+            _vid(rest[0]), payload.get("decision"), str(payload.get("reviewer") or ""),
+            workspace_id=_ws(payload, qs))})
     return False
 
 

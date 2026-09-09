@@ -222,6 +222,9 @@ function resolveWorkspaceId(props, sessionsSnap, workspacesSnap, serverWs) {
   const sid = props && props.sessionId ? String(props.sessionId)
     : sessionsSnap && sessionsSnap.current ? String(sessionsSnap.current) : ''
   if (!sid) return DEFAULT_WORKSPACE
+  // 有会话但工作区表尚未加载：返回 null（调用方显示加载态），
+  // 避免先按 DEFAULT 渲染出 deepseek-harness 再跳转（视觉闪烁）。
+  if (serverWs === null) return null
   // 优先：后端 /workspaces（含 session_ids，读宿主 workspace.json）——不依赖前端 shell 服务
   const byServer = list(serverWs).find(function (w) {
     return list(w && w.session_ids).map(String).indexOf(sid) >= 0
@@ -1141,10 +1144,146 @@ function StatusView(props) {
     h('div', { className: 'dsh-lit-stat-grid' }, cards))
 }
 
+// ── 技能管理视图（skill 管理体系 v0.2：登记 / 版本 / 审核状态 / 使用统计 / 全局发布）
+const SCOPE_LABEL = { workspace: '私有', global: '全局' }
+const LIFECYCLE_LABEL = { draft: '草稿', active: '生效', deprecated: '已弃用', archived: '已归档' }
+const REVIEW_LABEL = { pending: '待审核', approved: '已审核', rejected: '已拒绝' }
+const SOURCE_LABEL = { github: 'GitHub', distilled: '蒸馏', manual: '手工', imported: '导入' }
+
+function SkillView(props) {
+  const [scope, setScope] = React.useState('')
+  const [lifecycle, setLifecycle] = React.useState('')
+  const [selected, setSelected] = React.useState('')
+  const [busy, setBusy] = React.useState('')
+  const [notice, setNotice] = React.useState(null)
+
+  const skills = useResource(function () {
+    return api('/skills' + qs({ workspace_id: props.workspaceId, scope: scope, lifecycle: lifecycle }))
+  }, [props.workspaceId, scope, lifecycle])
+
+  const detail = useResource(function () {
+    if (!selected) return Promise.resolve(null)
+    const base = '/skills/' + encodeURIComponent(selected)
+    return Promise.all([
+      api(base + qs({ workspace_id: props.workspaceId })),
+      api(base + '/versions' + qs({ workspace_id: props.workspaceId })),
+      api(base + '/stats' + qs({ workspace_id: props.workspaceId })),
+    ]).then(function (r) {
+      return { skill: r[0] && r[0].skill, versions: list(r[1] && r[1].versions), stats: r[2] && r[2].stats }
+    })
+  }, [selected, props.workspaceId])
+
+  function reload() { skills.reload(); if (selected) detail.reload() }
+
+  function act(label, path, body) {
+    setBusy(label); setNotice(null)
+    api(path, { method: 'POST', body: body || {} }).then(function () {
+      setNotice({ text: label + ' 成功', error: false }); reload()
+    }).catch(function (error) {
+      setNotice({ text: label + ' 失败：' + message(error), error: true })
+    }).then(function () { setBusy('') })
+  }
+
+  const items = list(skills.data && skills.data.skills)
+  const d = detail.data
+
+  const filters = h('div', { className: 'dsh-lit-actions' },
+    h('label', { className: 'dsh-lit-field' }, '范围',
+      h('select', { className: 'dsh-lit-select', value: scope, 'aria-label': '范围', onChange: function (e) { setScope(e.target.value) } },
+        h('option', { value: '' }, '全部'),
+        h('option', { value: 'workspace' }, '私有'),
+        h('option', { value: 'global' }, '全局'))),
+    h('label', { className: 'dsh-lit-field' }, '状态',
+      h('select', { className: 'dsh-lit-select', value: lifecycle, 'aria-label': '生命周期', onChange: function (e) { setLifecycle(e.target.value) } },
+        h('option', { value: '' }, '全部'),
+        ['draft', 'active', 'deprecated', 'archived'].map(function (name) {
+          return h('option', { key: name, value: name }, LIFECYCLE_LABEL[name] || name)
+        }))))
+
+  const listBox = skills.loading ? h('div', { className: 'dsh-lit-muted' }, '加载中…')
+    : !items.length ? h(Empty, null, '暂无技能（先导入 GitHub 素体或从记忆蒸馏产生 draft）')
+    : h('div', { className: 'dsh-lit-stack' }, items.map(function (item) {
+      return h('button', {
+        key: item.id, type: 'button',
+        className: 'dsh-lit-box' + (selected === item.id ? ' dsh-lit-graphbox-selected' : ''),
+        onClick: function () { setSelected(item.id) },
+      },
+        h('div', { className: 'dsh-lit-title' }, '🧩 ' + (item.title || item.slug)),
+        h('div', { className: 'dsh-lit-mini' },
+          (SCOPE_LABEL[item.scope] || item.scope) + ' · ' + (LIFECYCLE_LABEL[item.lifecycle] || item.lifecycle) +
+          (item.active_version_id ? ' · v' + item.active_version_id : ' · 无生效版本')),
+        h('div', { className: 'dsh-lit-muted' }, short(item.description || item.slug, 60)))
+    }))
+
+  const detailBox = !selected ? h('div', { className: 'dsh-lit-muted' }, '选择左侧技能查看详情')
+    : detail.loading ? h('div', { className: 'dsh-lit-muted' }, '加载中…')
+    : detail.error ? h(Notice, { text: detail.error, error: true, retry: detail.reload })
+    : h('div', { className: 'dsh-lit-stack' },
+      h(Section, { title: d.skill.title || d.skill.slug },
+        h(KV, { rows: [
+          ['slug', d.skill.slug],
+          ['范围', (SCOPE_LABEL[d.skill.scope] || d.skill.scope) + (d.skill.workspace_id ? ' · ' + short(d.skill.workspace_id, 12) : '')],
+          ['生命周期', LIFECYCLE_LABEL[d.skill.lifecycle] || d.skill.lifecycle],
+          ['可见性', d.skill.visibility === 'model' ? '模型可调用' : '仅用户调用'],
+          ['来源区', d.skill.origin_workspace_id ? short(d.skill.origin_workspace_id, 12) : '—'],
+        ] })),
+      h(Section, { title: '版本历史', count: d.versions.length },
+        d.versions.length ? h('div', { className: 'dsh-lit-stack' }, d.versions.map(function (v) {
+          return h('div', { key: v.id, className: 'dsh-lit-box' },
+            h('div', { className: 'dsh-lit-mini' },
+              'v' + v.version + ' · ' + (REVIEW_LABEL[v.review_status] || v.review_status) +
+              ' · ' + (SOURCE_LABEL[v.source_kind] || v.source_kind)),
+            h('div', { className: 'dsh-lit-muted', title: 'artifact_sha256' },
+              short(v.content_sha256 || '', 16) + ' · ' + (list(v.files).length || 0) + ' 个附件'),
+            v.source_url ? h('div', { className: 'dsh-lit-muted' }, short(v.source_url, 60)) : null,
+            list(v.ignored_frontmatter_keys).length
+              ? h('div', { className: 'dsh-lit-muted' }, 'DSH 忽略字段：' + list(v.ignored_frontmatter_keys).join(', '))
+              : null,
+            h('div', { className: 'dsh-lit-actions' },
+              h(Button, {
+                disabled: !!busy || v.review_status === 'approved', title: '审核通过',
+                onClick: function () { act('审核通过', '/skill-versions/' + v.id + '/review', { decision: 'approve', reviewer: 'ui-reviewer', workspace_id: props.workspaceId }) },
+              }, '通过'),
+              h(Button, {
+                disabled: !!busy || v.review_status === 'rejected', title: '拒绝该版本',
+                onClick: function () { act('拒绝', '/skill-versions/' + v.id + '/review', { decision: 'reject', reviewer: 'ui-reviewer', workspace_id: props.workspaceId }) },
+              }, '拒绝')))
+        })) : h('div', { className: 'dsh-lit-muted' }, '暂无版本')),
+      h(Section, { title: '使用统计' },
+        h(KV, { rows: [
+          ['加载次数', d.stats.load_count],
+          ['应用任务', d.stats.applied_run_count],
+          ['效果', d.stats.effectiveness == null
+            ? '暂无评价' + (d.stats.effectiveness_reason ? '（' + d.stats.effectiveness_reason + '）' : '')
+            : Math.round(d.stats.effectiveness * 100) + '% · 样本 ' + d.stats.effectiveness_samples],
+          ['评价覆盖', d.stats.coverage == null ? '—' : Math.round(d.stats.coverage * 100) + '%'],
+          ['调用路径', d.stats.invocation_counts ? JSON.stringify(d.stats.invocation_counts.load || {}) : '—'],
+        ] })),
+      h('div', { className: 'dsh-lit-actions' },
+        d.skill.scope === 'workspace'
+          ? h(Button, {
+            title: '发布为全局（需批准人）', disabled: !!busy,
+            onClick: function () { act('发布为全局', '/skills/' + encodeURIComponent(selected) + '/promote', { approver: 'ui-reviewer', workspace_id: props.workspaceId }) },
+          }, '发布为全局')
+          : null,
+        h(Button, { icon: 'refresh', title: '刷新详情', onClick: reload, disabled: detail.loading })))
+
+  return h('div', { className: 'dsh-lit-stack', 'aria-busy': skills.loading },
+    h('div', { className: 'dsh-lit-actions' },
+      h('h2', { className: 'dsh-lit-title dsh-lit-content' }, '技能'),
+      h(Button, { icon: 'refresh', title: '刷新技能列表', onClick: reload, disabled: skills.loading })),
+    h(Notice, { text: skills.error, error: true, retry: skills.reload }),
+    h(Notice, { text: notice && notice.text, error: notice && notice.error, success: notice && !notice.error }),
+    filters,
+    h('div', { className: 'dsh-lit-stack' }, listBox),
+    h('div', { className: 'dsh-lit-stack' }, detailBox))
+}
+
 const TABS = [
   { id: 'docs', label: '📄 文档', component: DocumentsView },
   { id: 'knowledge', label: '🧠 知识', component: KnowledgeView },
   { id: 'graph', label: '🕸 图谱', component: GraphView },
+  { id: 'skills', label: '🧩 技能', component: SkillView },
   { id: 'status', label: '📊 状况', component: StatusView },
 ]
 
@@ -1235,6 +1374,10 @@ function LiteraturePanel(props) {
     }).catch(function () { setServerWs([]) })
   }, [])
   const workspaceId = resolveWorkspaceId(props, sessions, workspaces, serverWs)
+  if (workspaceId === null) {
+    return h('div', { className: 'dsh-lit-panel' },
+      h('div', { className: 'dsh-lit-muted', role: 'status' }, '正在解析工作区…'))
+  }
   return h(PanelBody, { key: workspaceId, workspaceId: workspaceId, shellWorkspaces: workspaces.items || [] })
 }
 

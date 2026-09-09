@@ -570,6 +570,36 @@ class SkillStore:
             if row is None:
                 raise NotFoundError('skill version not found')
             return self._version_dict(conn, row)
+
+    def review_version(self, version_id, decision, reviewer, workspace_id=''):
+        """审核版本：只更新审核元数据（review_status/reviewed_by/reviewed_at）。
+
+        版本内容仍不可变——本方法不触碰 skill_md/manifest/hash 等任何内容字段。
+        decision 为 'approve' 或 'reject'；重复提交同一结果幂等。
+        """
+        if decision not in ('approve', 'reject'):
+            raise DomainError("decision must be 'approve' or 'reject'")
+        reviewer = _text(reviewer, 'reviewer', True)
+        version_id = _positive(version_id, 'version_id')
+        status = 'approved' if decision == 'approve' else 'rejected'
+        with self._transaction(write=True) as conn:
+            view, args = self._view(workspace_id, write=True)
+            row = conn.execute(
+                'SELECT v.* FROM skill_versions v JOIN skills s ON s.id=v.skill_id'
+                ' WHERE v.id=? AND s.deleted_at IS NULL AND ' + view,
+                [version_id] + args).fetchone()
+            if row is None:
+                raise NotFoundError('skill version not found')
+            if row['review_status'] == status:
+                return self._version_dict(conn, row)
+            conn.execute(
+                'UPDATE skill_versions SET review_status=?, reviewed_by=?, reviewed_at=? WHERE id=?',
+                (status, reviewer, time.time(), version_id))
+            self._audit(conn, 'review_version', 'skill_version', version_id, reviewer, '',
+                        {'decision': decision, 'previous_status': row['review_status'],
+                         'status': status, 'skill_id': row['skill_id']})
+            return self._version_dict(conn, conn.execute(
+                'SELECT * FROM skill_versions WHERE id=?', (version_id,)).fetchone())
     def create_version(self, skill_id, payload, workspace_id=''):
         payload = _payload(payload)
         forbidden = {'scope', 'origin_workspace_id', 'version', 'id', 'skill_id',

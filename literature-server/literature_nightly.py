@@ -4,7 +4,7 @@
 literature_nightly.py — literature 夜间加工管线（v1.1 第 2 步）
 
 时机：凌晨 03:30（deepmemory 03:00 错峰；由 systemd timer 调度，Persistent=true 跨天补跑）
-模型：deepseek-v4-flash-0731（谷价；fallback 链 → deepseek-v4-flash），经 uuapi 网关
+模型：deepseek-v4-flash（DeepSeek 官方 API）
 流程：读文献(documents) → LLM 拆证据(claim+原文摘录+锚点) → LLM 提炼知识(单一性) → 向量化入库 → 关联
 产出：evidence（doc_id+锚点，无锚点不入库）/ knowledge_items（library 默认 runtime，bias 不可归档）
 """
@@ -36,13 +36,13 @@ def _credentials_map():
 
 
 def llm_chat(prompt, model=None, system=None, api_key=None):
-    """uuapi 网关 deepseek-v4-flash-0731，fallback 链。返回 {"content":...} 或 {"error":...}。"""
-    model = model or "deepseek-v4-flash-0731"
+    """DeepSeek 官方 API（deepseek-v4-flash）。返回 {"content":...} 或 {"error":...}。"""
+    model = model or "deepseek-v4-flash"
     creds = _credentials_map()
-    key = api_key or creds.get("UUAPI_API_KEY") or creds.get("UUAPI_GPT_API_KEY") or ""
+    key = api_key or creds.get("DEEPSEEK_API_KEY") or ""
     if not key:
-        return {"error": "no api key (refs.UUAPI_API_KEY)"}
-    url = "https://uuapi.io/v1/chat/completions"
+        return {"error": "no api key (refs.DEEPSEEK_API_KEY)"}
+    url = "https://api.deepseek.com/v1/chat/completions"
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -51,7 +51,7 @@ def llm_chat(prompt, model=None, system=None, api_key=None):
     chain = []
     if model:
         chain.append(model)
-    for m in ("deepseek-v4-flash", "deepseek-v4-flash-0731"):
+    for m in ("deepseek-v4-flash",):
         if m not in chain:
             chain.append(m)
     last_err = None

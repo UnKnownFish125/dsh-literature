@@ -18,7 +18,8 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import literature_upstream as UP  # 单服务合并：deepmemory 上游（search/libraries/list/graph）
+import literature_upstream as UP
+import literature_skill_routes as SKILL_ROUTES  # skill 管理体系路由（v0.2）  # 单服务合并：deepmemory 上游（search/libraries/list/graph）
 
 from literature_domain import (
     ConflictError,
@@ -54,9 +55,9 @@ CONFIG_SCHEMA = {
             },
             "default_workspace": {
                 "description": "默认工作区",
-                "hint": "未显式传 workspace_id 时使用的默认值",
+                "hint": "留空=按调用方会话解析（推荐）。禁止填假工作区字符串；本项仅作展示兜底，服务端不据此写入。",
                 "type": "string",
-                "default": "deepseek-hardness",
+                "default": "",
             },
         },
     },
@@ -267,6 +268,8 @@ class Handler(BaseHTTPRequestHandler):
             path = parsed.path
             qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
+            if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
+                return
             # 附件下载路由：仅凭签名 token（window.open 无法带 Bearer），先于通用鉴权
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "attachments"]:
                 return self._serve_attachment(parts[3], qs.get("t", [""])[0])
@@ -394,6 +397,8 @@ class Handler(BaseHTTPRequestHandler):
             path = parsed.path
             qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
+            if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
+                return
             store = get_store()
 
             # 附件上传：multipart/form-data
@@ -526,6 +531,8 @@ class Handler(BaseHTTPRequestHandler):
             path = parsed.path
             qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
+            if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
+                return
             store = get_store()
             body = self._read_body()
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "categories"]:
@@ -552,6 +559,8 @@ class Handler(BaseHTTPRequestHandler):
             path = parsed.path
             qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
+            if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
+                return
             store = get_store()
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "categories"]:
                 return self._v2_call(lambda: self._send(200, store.soft_delete_category(

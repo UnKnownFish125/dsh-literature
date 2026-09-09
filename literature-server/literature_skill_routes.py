@@ -106,7 +106,15 @@ def _error_status(exc):
 
 
 def try_handle(handler, method, parts, qs, body=None):
-    """分发 skill 相关请求。返回 True 表示已处理（已写出响应）。"""
+    """分发 skill 相关请求。返回 True 表示已处理（已写出响应）。
+
+    兼容两种前缀（均受支持）：
+      /v1/skills、/v1/skill-events …              （契约文档写法，供日志注入插件使用）
+      /v1/literature/skills、/v1/literature/...   （与既有 literature API 风格一致）
+    """
+    if len(parts) >= 3 and parts[0] == "v1" and parts[1] == "literature":
+        if parts[2] in SKILL_HEADS:
+            parts = [parts[0]] + parts[2:]      # 去掉 "literature"，保留 "v1"
     if len(parts) < 2 or parts[0] != "v1" or parts[1] not in SKILL_HEADS:
         return False
     head = parts[1]

@@ -378,7 +378,26 @@ class SkillStore:
             sql += ' AND lifecycle=?'
             args.append(lifecycle)
         with self._transaction() as conn:
-            return [dict(row) for row in conn.execute(sql + ' ORDER BY updated_at DESC,id', args)]
+            rows = [dict(row) for row in conn.execute(sql + ' ORDER BY updated_at DESC,id', args)]
+            return self._attach_l0(conn, rows)
+
+    @staticmethod
+    def _attach_l0(conn, rows):
+        """给技能列表补 summary_l0（取最新有摘要的版本），供 UI 列表省 token。"""
+        ids = [r['id'] for r in rows if r.get('id')]
+        if not ids:
+            return rows
+        marks = ','.join('?' * len(ids))
+        best = {}
+        for row in conn.execute(
+                'SELECT skill_id, summary_l0 FROM skill_versions'
+                ' WHERE skill_id IN (' + marks + ") AND summary_l0 != ''"
+                ' ORDER BY version DESC', ids):
+            best.setdefault(row['skill_id'], row['summary_l0'])
+        for r in rows:
+            r['summary_l0'] = best.get(r['id'], '')
+        return rows
+
     def create_skill(self, payload):
         payload = _payload(payload)
         slug = _slug(payload.get('slug'))

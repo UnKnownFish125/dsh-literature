@@ -1212,7 +1212,7 @@ function SkillView(props) {
         h('div', { className: 'dsh-lit-mini' },
           (SCOPE_LABEL[item.scope] || item.scope) + ' · ' + (LIFECYCLE_LABEL[item.lifecycle] || item.lifecycle) +
           (item.active_version_id ? ' · v' + item.active_version_id : ' · 无生效版本')),
-        h('div', { className: 'dsh-lit-muted' }, short(item.description || item.slug, 60)))
+        h('div', { className: 'dsh-lit-muted' }, short(item.summary_l0 || item.description || item.slug, 70)))
     }))
 
   const detailBox = !selected ? h('div', { className: 'dsh-lit-muted' }, '选择左侧技能查看详情')
@@ -1227,6 +1227,19 @@ function SkillView(props) {
           ['可见性', d.skill.visibility === 'model' ? '模型可调用' : '仅用户调用'],
           ['来源区', d.skill.origin_workspace_id ? short(d.skill.origin_workspace_id, 12) : '—'],
         ] })),
+      (function () {
+        const latest = list(d.versions)[0]
+        if (!latest || !latest.overview_l1) return null
+        return h(Section, { title: '概览 L1' },
+          h('div', { className: 'dsh-lit-muted', style: { whiteSpace: 'pre-wrap', lineHeight: '1.6' } },
+            latest.overview_l1),
+          latest.summary_l0
+            ? h('div', { className: 'dsh-lit-mini', style: { marginTop: '6px' } }, 'L0：' + latest.summary_l0)
+            : null,
+          h('div', { className: 'dsh-lit-mini' },
+            'L2 正文 ' + (latest.skill_md ? latest.skill_md.length + ' 字符' : '—') +
+            '（按需加载，不在此处展开）'))
+      })(),
       h(Section, { title: '版本历史', count: d.versions.length },
         d.versions.length ? h('div', { className: 'dsh-lit-stack' }, d.versions.map(function (v) {
           return h('div', { key: v.id, className: 'dsh-lit-box' },

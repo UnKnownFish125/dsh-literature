@@ -20,7 +20,7 @@ import os
 import sqlite3
 import time
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1  # 由文件末尾的迁移表覆盖（保持向后可读，勿在此处递增）
 
 # ── 迁移 1：skill 管理体系初始表结构 ────────────────────────────────────────
 _MIGRATION_1 = [
@@ -210,6 +210,20 @@ _MIGRATION_1 = [
 ]
 
 MIGRATIONS = {1: _MIGRATION_1}
+
+# ── 迁移 2：L0/L1/L2 分层（借鉴 OpenViking 渐进式加载）──────────────────────
+# L0 summary_l0  一句话摘要：解决什么问题（列表/目录注入用，省 token）
+# L1 overview_l1 结构化概览：适用场景 / 前置条件 / 关键步骤 / 产物
+# L2 = 现有 skill_md 正文，按需加载
+# layer_model / layers_generated_at 记录生成来源，便于重算与审计
+_MIGRATION_2 = [
+    "ALTER TABLE skill_versions ADD COLUMN summary_l0 TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE skill_versions ADD COLUMN overview_l1 TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE skill_versions ADD COLUMN layer_model TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE skill_versions ADD COLUMN layers_generated_at REAL",
+]
+MIGRATIONS[2] = _MIGRATION_2
+SCHEMA_VERSION = 2
 
 
 def _applied_versions(conn):

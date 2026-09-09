@@ -216,6 +216,16 @@ class SkillDeployer:
         self.config = dict(config)
         self.db_path = db_path
         self.native_verify = native_verify
+        # 可选：内容寻址存储。设置后，artifact_uri 为空的版本也能从 CAS 重建完整
+        # bundle（否则只能部署 SKILL.md，引用文件全部丢失）。
+        blob_root = config.get("blob_root")
+        self.blob_store = None
+        if blob_root:
+            try:
+                from literature_skill_blobs import BlobStore
+                self.blob_store = BlobStore(blob_root)
+            except ImportError:
+                self.blob_store = None
         self._mutex = threading.RLock()
         self.max_files = int(config.get("max_files", 4096))
         self.max_bytes = int(config.get("max_bytes", 64 * 1024 * 1024))
@@ -467,7 +477,7 @@ class SkillDeployer:
         if len(expected) > self.max_files or sum(r["size_bytes"] for r in expected.values()) > self.max_bytes:
             raise DeploymentError("bundle exceeds configured limits")
         return {"version": version, "expected": expected, "entry": data,
-                "artifact": artifact, "slug": skill["slug"]}
+                "artifact": artifact, "slug": skill["slug"], "stored": stored}
 
     def _source(self, spec):
         uri = spec["version"]["artifact_uri"]
@@ -477,6 +487,16 @@ class SkillDeployer:
                 raise DeploymentError("artifact_uri must be a local directory")
             path = _absolute(unquote(parsed.path) if parsed.scheme else uri)
             files, modes = self._scan(path)
+        elif self.blob_store is not None and spec.get("stored"):
+            # 从内容寻址存储重建完整 bundle（无源目录场景）。
+            files = {"SKILL.md": spec["entry"]}
+            modes = {"SKILL.md": spec["expected"]["SKILL.md"]["mode"]}
+            for rel, item in spec["stored"].items():
+                if rel == "SKILL.md":
+                    continue
+                data = self.blob_store.get(item["sha256"])
+                files[rel] = data
+                modes[rel] = item["mode"]
         else:
             files = {"SKILL.md": spec["entry"]}
             modes = {"SKILL.md": spec["expected"]["SKILL.md"]["mode"]}

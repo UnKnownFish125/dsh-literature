@@ -17,6 +17,7 @@ literature_skill_import.py — 把磁盘上的 SKILL.md 目录导入 literature�
 import argparse
 import json
 import os
+import re
 import sys
 
 EXCLUDE_DIRS = frozenset((".git", "node_modules", "__pycache__", ".github",
@@ -31,6 +32,44 @@ TEXT_SUFFIXES = frozenset((
     ".ini", ".cfg", ".env", ".gitignore", ".sql", ".go", ".rs", ".java", ".c", ".h",
     ".cpp", ".rb", ".php", ".lua", ".vue", ".svelte",
 ))
+
+# ── GPU 依赖探测（面向"纯 CPU 服务器"场景）────────────────────────────────
+# 只做标记、不阻断导入：命中即记入 compatibility，前端可红标提示。
+_GPU_PATTERNS = (
+    ("cuda", re.compile(r"\bcuda\b", re.I)),
+    ("nvidia", re.compile(r"\bnvidia\b", re.I)),
+    ("cupy", re.compile(r"\bcupy\b", re.I)),
+    ("torch_cuda", re.compile(r"torch\.cuda|\.cuda\(\)|cuda:\d", re.I)),
+    ("tensorrt", re.compile(r"\btensorrt\b", re.I)),
+    ("opencl", re.compile(r"\bopencl\b", re.I)),
+    ("rapids", re.compile(r"\brapids\b|\bcudf\b|\bcuml\b", re.I)),
+    ("gpu_generic", re.compile(r"\bGPU\b")),
+)
+
+
+def scan_gpu_dependencies(skill_md, files=None):
+    """扫描 SKILL.md 与文本附件中的 GPU 依赖线索。
+
+    返回 {"gpu_required": bool, "hits": [{"path","marker"}], "scanned": n}。
+    只扫可 UTF-8 解码的文本，二进制资源跳过。
+    """
+    hits, scanned = [], 0
+    targets = [("SKILL.md", skill_md.encode("utf-8") if isinstance(skill_md, str) else skill_md)]
+    for rel, data in (files or {}).items():
+        suffix = os.path.splitext(rel)[1].lower()
+        if suffix and suffix not in TEXT_SUFFIXES:
+            continue
+        targets.append((rel, data))
+    for rel, data in targets:
+        try:
+            text = data.decode("utf-8")
+        except (UnicodeDecodeError, AttributeError):
+            continue
+        scanned += 1
+        for marker, pattern in _GPU_PATTERNS:
+            if pattern.search(text):
+                hits.append({"path": rel, "marker": marker})
+    return {"gpu_required": bool(hits), "hits": hits, "scanned": scanned}
 
 
 class ImportError_(ValueError):
@@ -52,7 +91,7 @@ def collect_bundle(root, max_files=MAX_FILES, max_total=MAX_TOTAL_BYTES,
     root = os.path.abspath(root)
     if not os.path.isdir(root):
         raise ImportError_("not a directory: " + root)
-    files, skipped, total = {}, [], 0
+    files, modes, skipped, total = {}, {}, [], 0
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS and not d.startswith(".")]
         for name in sorted(filenames):
@@ -80,8 +119,9 @@ def collect_bundle(root, max_files=MAX_FILES, max_total=MAX_TOTAL_BYTES,
                 continue
             with open(path, "rb") as fh:
                 files[rel] = fh.read()
+            modes[rel] = os.stat(path).st_mode & 0o777
             total += size
-    return files, {"skipped": skipped, "bytes": total}
+    return files, modes, {"skipped": skipped, "bytes": total}
 
 
 def import_directory(db_path, root, workspace_id, slug=None, title="",
@@ -101,7 +141,14 @@ def import_directory(db_path, root, workspace_id, slug=None, title="",
     checked = SkillStore.validate_skill_md(skill_md)
     fm = checked["frontmatter"]
     name = slug or _slug_from(fm.get("name") or os.path.basename(root))
-    files, meta = collect_bundle(root)
+    files, modes, meta = collect_bundle(root)
+    gpu = scan_gpu_dependencies(skill_md, files)
+
+    # 内容寻址落盘：skill_files 只存元数据，正文必须进 CAS 才能在无源目录的
+    # 服务器上重建完整 bundle（否则部署只有 SKILL.md）。
+    from literature_skill_blobs import BlobStore
+    blobs = BlobStore(os.path.join(os.path.dirname(os.path.abspath(db_path)), "blobs"))
+    blobs.put_files(files)
 
     store = SkillStore(db_path)
     try:
@@ -117,9 +164,18 @@ def import_directory(db_path, root, workspace_id, slug=None, title="",
         created_skill = True
 
     version = store.create_version(skill["id"], {
-        "skill_md": skill_md, "files": files, "workspace_id": workspace_id,
+        "skill_md": skill_md, "workspace_id": workspace_id,
+        "files": [{"rel_path": rel, "content": data, "mode": modes.get(rel, 0o644)}
+                  for rel, data in files.items()],
         "source_kind": source_kind, "source_url": source_url,
         "source_ref": source_ref, "created_by": created_by,
+        "compatibility": {
+            "gpu_required": gpu["gpu_required"],
+            "gpu_hits": gpu["hits"][:20],
+            "cpu_only_ok": not gpu["gpu_required"],
+            "blob_store": "cas-v1",
+            "files": len(files),
+        },
     })
 
     layers = None
@@ -136,6 +192,7 @@ def import_directory(db_path, root, workspace_id, slug=None, title="",
         "files": len(files), "bytes": meta["bytes"], "skipped": meta["skipped"],
         "warnings": checked["warnings"],
         "ignored_frontmatter_keys": checked["ignored_frontmatter_keys"],
+        "gpu": gpu,
         "layers": layers,
     }
 
@@ -159,7 +216,7 @@ def _self_test():
             fh.write("secret")
         with open(os.path.join(root, "node_modules", "x.js"), "w") as fh:
             fh.write("x")
-        files, meta = collect_bundle(root)
+        files, modes, meta = collect_bundle(root)
         assert set(files) == {"templates/a.html", "color.png"}, sorted(files)
         assert "SKILL.md" not in files
         assert not any(".git" in k or "node_modules" in k for k in files)

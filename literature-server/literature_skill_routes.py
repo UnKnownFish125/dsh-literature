@@ -10,7 +10,10 @@ literature_skill_routes.py — skill 管理体系的 HTTP 路由层。
 设计约束（依据 docs/dsh-literature-skill-management-v02.md）：
 - workspace_id 一律由调用方显式提供（按 #668 规则解析）；**本层不做任何兜底**。
 - 权限语义沿用既有约定：写传 ws≠资源区 → 403；读传 ws≠区 → 404（不泄露）。
-- 认证（Bearer）由 server.py 统一处理，本层假定已通过。
+- 认证（Bearer）/ 拒 Origin 由 server.py 的 `_reject_browser_origin()` 统一处理，
+  且 do_GET 中本模块的 hook **必须排在它之后**——否则读路由会同时绕过 401 与 403
+  （2026-09-16 实测缺陷：hook 曾在鉴权前，任何本机可访问者都能读技能元数据）。
+  回归测试见 tests/test_server_dispatch_order.py。
 
 端点：
   POST   /v1/skills                          创建（默认 workspace 私有）
@@ -33,6 +36,7 @@ literature_skill_routes.py — skill 管理体系的 HTTP 路由层。
   GET    /v1/skill-events                    事件列表
 """
 
+import os
 import sys
 
 SKILL_HEADS = frozenset((
@@ -209,10 +213,82 @@ def _skills(handler, method, rest, qs, body):
     return False
 
 
+def _blob_store(handler):
+    """CAS 句柄（技能文件内容都在里面，blob_root 取自部署配置）。"""
+    mod = sys.modules.get(type(handler).__module__)
+    cfg = getattr(mod, "SKILL_DEPLOY_CONFIG", None) or {}
+    root = cfg.get("blob_root")
+    if not root:
+        raise _Unavailable("未配置 blob_root（无法读取技能文件内容）")
+    try:
+        from literature_skill_blobs import BlobStore
+    except ImportError as exc:  # pragma: no cover
+        raise _Unavailable("literature_skill_blobs 未就位: %s" % exc) from None
+    return BlobStore(root)
+
+
+_PREVIEW_SUFFIXES = frozenset((
+    ".md", ".txt", ".json", ".yaml", ".yml", ".js", ".mjs", ".cjs", ".ts", ".tsx",
+    ".jsx", ".py", ".sh", ".css", ".html", ".htm", ".svg", ".xml", ".csv", ".toml",
+    ".ini", ".cfg", ".sql", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".rb", ".php",
+    ".lua", ".vue", ".svelte",
+))
+_PREVIEW_MAX_BYTES = 512 * 1024
+
+
+def _previewable(rel_path, size_bytes=0):
+    suffix = os.path.splitext(rel_path)[1].lower()
+    if suffix and suffix not in _PREVIEW_SUFFIXES:
+        return False
+    return size_bytes <= _PREVIEW_MAX_BYTES
+
+
+def _version_files(handler, version_id, want_path=""):
+    """版本文件列表 / 单文件内容。SKILL.md 不在 skill_files 表里，单独补。"""
+    rows = _query(handler,
+                  "SELECT rel_path, size_bytes, sha256, mode FROM skill_files"
+                  " WHERE skill_version_id=? ORDER BY rel_path", (version_id,))
+    meta = _query(handler, "SELECT skill_md, length(skill_md) AS n FROM skill_versions WHERE id=?",
+                  (version_id,))
+    if not meta:
+        return handler._send(404, {"error": "skill version not found"})
+    entry_size = meta[0]["n"] or 0
+    files = [{"rel_path": "SKILL.md", "size_bytes": entry_size, "sha256": "",
+              "mode": 420, "entry": True,
+              "previewable": _previewable("SKILL.md", entry_size)}]
+    files += [{"rel_path": r["rel_path"], "size_bytes": r["size_bytes"], "sha256": r["sha256"],
+               "mode": r["mode"], "entry": False,
+               "previewable": _previewable(r["rel_path"], r["size_bytes"])} for r in rows]
+    if not want_path:
+        return handler._send(200, {"files": files, "count": len(files),
+                                   "preview_max_bytes": _PREVIEW_MAX_BYTES})
+    if want_path == "SKILL.md":
+        return handler._send(200, {"path": "SKILL.md", "binary": False,
+                                   "content": meta[0]["skill_md"], "size_bytes": entry_size})
+    target = next((r for r in rows if r["rel_path"] == want_path), None)
+    if target is None:
+        return handler._send(404, {"error": "file not found in this version"})
+    if not _previewable(target["rel_path"], target["size_bytes"]):
+        return handler._send(200, {"path": target["rel_path"], "binary": True, "content": "",
+                                   "size_bytes": target["size_bytes"],
+                                   "reason": "二进制或超过预览上限（%d B）" % _PREVIEW_MAX_BYTES})
+    data = _blob_store(handler).get(target["sha256"])
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return handler._send(200, {"path": target["rel_path"], "binary": True, "content": "",
+                                   "size_bytes": target["size_bytes"], "reason": "非 UTF-8 文本"})
+    return handler._send(200, {"path": target["rel_path"], "binary": False,
+                               "content": text, "size_bytes": target["size_bytes"]})
+
+
 def _versions(handler, method, rest, qs, body):
     if method == "GET" and len(rest) == 1:
         store = _skill_store(handler)
         return handler._send(200, {"version": store.get_version(_vid(rest[0]), _ws(None, qs))})
+    if method == "GET" and len(rest) == 2 and rest[1] == "files":
+        want = (qs.get("path") or [""])[0]
+        return _version_files(handler, _vid(rest[0]), want)
     if method == "POST" and len(rest) == 2 and rest[1] == "review":
         payload = body if isinstance(body, dict) and body else _body(handler)
         store = _skill_store(handler)
@@ -222,6 +298,17 @@ def _versions(handler, method, rest, qs, body):
     return False
 
 
+def _query(handler, sql, params=()):
+    """只读查询（部署器没有列表方法，直接查库）。"""
+    import sqlite3
+    conn = sqlite3.connect(_db_path(handler), timeout=15)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(sql, params)]
+    finally:
+        conn.close()
+
+
 def _deployments(handler, method, rest, qs, body):
     dep = _deployer(handler)
     if method == "POST" and not rest:
@@ -229,8 +316,8 @@ def _deployments(handler, method, rest, qs, body):
         return handler._send(201, {"deployment": dep.deploy(
             payload.get("skill_id"), payload.get("version_id"), payload.get("target_id"))})
     if method == "GET" and not rest:
-        return handler._send(200, {"deployments": dep.list_deployments(
-            skill_id=qs.get("skill_id", [None])[0])})
+        rows = _query(handler, "SELECT * FROM skill_deployments ORDER BY updated_at DESC LIMIT 200")
+        return handler._send(200, {"deployments": rows})
     if len(rest) == 2 and method == "POST":
         action = rest[1]
         if action == "verify":
@@ -238,7 +325,10 @@ def _deployments(handler, method, rest, qs, body):
         if action == "rollback":
             return handler._send(200, {"deployment": dep.rollback(rest[0])})
         if action == "retire":
-            return handler._send(200, {"deployment": dep.retire_by_id(rest[0])})
+            row = _query(handler, "SELECT skill_id, target_id FROM skill_deployments WHERE id=?", (rest[0],))
+            if not row:
+                return handler._send(404, {"error": "deployment not found"})
+            return handler._send(200, {"deployment": dep.retire(row[0]["skill_id"], row[0]["target_id"])})
     return False
 
 

@@ -40,6 +40,25 @@ PORT = int(os.environ.get("LITERATURE_SERVER_PORT", "6260"))
 MAX_BODY_BYTES = int(os.environ.get("LITERATURE_MAX_BODY_BYTES", str(50 * 1024 * 1024)))
 ATTACHMENT_TTL_SECONDS = 300  # 5 分钟
 
+# ── skill 受管部署配置（rank 300 = customSkillDirs，项目级 100/200 优先）────
+# 目标目录必须由调用方显式配置；部署器不接受隐式全局目标。
+SKILLS_MANAGED_DIR = os.environ.get("LITERATURE_SKILLS_DIR", "/www/dsh/skills-managed")
+SKILL_DEPLOY_CONFIG = {
+    "blob_root": os.path.join(DATA_DIR, "blobs"),
+    "projectDir": "/www/dsh",
+    "dshHome": os.environ.get("DSH_HOME") or "/www/dsh/home",
+    "agentsHome": os.environ.get("DSH_AGENTS_HOME") or "/root/.agents",
+    "customSkillDirs": [SKILLS_MANAGED_DIR],
+    "targets": {
+        # 全局技能：所有工作区可见（DSH 侧无工作区概念，故只有 global 目标）
+        "managed-global": {
+            "root_dir": SKILLS_MANAGED_DIR,
+            "scope": "global",
+            "rank": 300,
+        },
+    },
+}
+
 # 插件配置页（设置 → 插件 → 插件配置）schema：与 config_schema.json 同构
 CONFIG_SCHEMA = {
     "basic": {
@@ -268,12 +287,14 @@ class Handler(BaseHTTPRequestHandler):
             path = parsed.path
             qs = urllib.parse.parse_qs(parsed.query)
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
-            if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
-                return
             # 附件下载路由：仅凭签名 token（window.open 无法带 Bearer），先于通用鉴权
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "attachments"]:
                 return self._serve_attachment(parts[3], qs.get("t", [""])[0])
             if self._reject_browser_origin():
+                return
+            # skill 路由：必须在鉴权之后。_reject_browser_origin() 同时负责
+            # 「拒浏览器 Origin(403)」与「校验 Bearer(401)」，放在它之前等于两者都绕过。
+            if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
                 return
 
             # ==== kb 查询路由（单服务合并，deepmemory 上游，H2 kb-server 归入 6260）====

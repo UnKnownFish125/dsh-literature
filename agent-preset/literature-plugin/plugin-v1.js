@@ -109,7 +109,7 @@ export function apply(ctx) {
       tags: { type: 'array', description: 'Tags.', default: [] },
       workspace_id: WS_PARAM,
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       const ws = needWs(args)
       const doc = await api('/documents', { method: 'POST', body: { ...args, workspace_id: ws } })
@@ -125,7 +125,7 @@ export function apply(ctx) {
       k: { type: 'integer', description: 'Max results.', default: 5 },
       workspace_id: WS_PARAM,
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       const ws = needWs(args)
       const data = await api(`/documents?q=${encodeURIComponent(String(args.query || ''))}&workspace_id=${encodeURIComponent(ws)}`)
@@ -145,7 +145,7 @@ export function apply(ctx) {
       file: { type: 'string', required: true, description: 'Absolute file path on this server to upload.' },
       workspace_id: WS_PARAM,
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       const ws = needWs(args)
       const filePath = String(args.file || '')
@@ -172,7 +172,7 @@ export function apply(ctx) {
       patch: { type: 'object', required: true, description: 'Fields to update (e.g. {"read_status":"read"}).', additionalProperties: true },
       workspace_id: WS_PARAM,
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       const ws = needWs(args)
       const body = { ...(args.patch || {}), workspace_id: ws }
@@ -192,7 +192,7 @@ export function apply(ctx) {
       concept: { type: 'string', description: 'If given, also create a knowledge item with this concept.' },
       workspace_id: WS_PARAM,
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       const ws = needWs(args)
       const ev = await api('/evidence', {

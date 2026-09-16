@@ -104,7 +104,7 @@ export function apply(ctx) {
       workspace_id: { ...WS_PARAM, description: 'Workspace UUID。**建议总是显式传**：留空时服务端会落到默认工作区，本地知识将查不到。' },
       mode: { type: 'string', description: 'hybrid|knowledge-only|deepmemory-only|auto', default: 'auto' },
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       const body = { query: String(args.query || ''), k: args.k || 5, mode: args.mode || 'auto' }
       if (args.library) body.library = args.library
@@ -122,7 +122,7 @@ export function apply(ctx) {
       archived: { type: 'boolean', description: 'Include archived.', default: false },
       workspace_id: WS_PARAM,
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       if (args.archived) {
         // archived=true → 枚举本地 literature 归档知识（/knowledge-browse，本地权威）
@@ -150,7 +150,7 @@ export function apply(ctx) {
       k: { type: 'integer', description: 'Max constraints.', default: 12 },
       workspace_id: { ...WS_PARAM, description: 'Optional. bias 为全局约束库，不传也可读全部。' },
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       // 此前不传 ws → 服务端兜底幻影 DEFAULT_WORKSPACE → 失明
       const q = [`k=${args.k || 12}`]
@@ -168,7 +168,7 @@ export function apply(ctx) {
       k: { type: 'integer', description: 'Max results.', default: 10 },
       workspace_id: WS_PARAM,
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       if (!args.workspace_id) {
         return { ok: false, error: 'kb_contracts 需要显式 workspace_id（知识按工作区隔离，服务端默认值不可依赖）' }
@@ -189,7 +189,7 @@ export function apply(ctx) {
       // 此前缺该参数 → 服务端 domain 守卫必然拒绝（workspace_id is required）
       workspace_id: { ...WS_PARAM, description: '目标工作区 UUID（**必填**，服务端拒绝空值以防跨区批量归档）。' },
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       if (!args.workspace_id) {
         return { ok: false, error: 'kb_archive_library 需要显式 workspace_id（服务端默认隔离兜底会拒绝空值）' }
@@ -207,7 +207,7 @@ export function apply(ctx) {
       workspace_id: WS_PARAM,
       library: { type: 'string', description: 'Optional single library.', default: '' },
     },
-    output: { schema: outSchema, render: textRender },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       // 此前完全不传 ws，上游行为不明确；显式传递以对齐按区隔离语义
       const q = []

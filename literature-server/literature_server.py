@@ -310,7 +310,10 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "constraints":
                 # 轨 B（v0.4）：约束=literature 知识 bias（最新契约）+ 未知识化的 deepmemory bias 记忆
                 # （N4：知识化记忆不再以记忆形态重复——去重）
-                ws = qs.get("workspace_id", [UP.DEFAULT_WORKSPACE])[0]
+                ws = str(qs.get("workspace_id", [""])[0] or "").strip()
+                if not ws:
+                    return self._send(400, {"error": "workspace_id is required"
+                                                     "（服务端不再兜底默认工作区：兜底值不存在→失明，空值→上游返回任意区数据）"})
                 k = int(qs.get("k", ["50"])[0])
                 store = get_store()
                 kn_items, kn_mem_ids = store.kb_bias_constraints(ws, k)
@@ -323,7 +326,9 @@ class Handler(BaseHTTPRequestHandler):
                                         "note": "" if bias else "bias 库为空（需存量归类）"})
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "contracts":
                 topic = qs.get("topic", [""])[0]
-                ws = qs.get("workspace_id", [UP.DEFAULT_WORKSPACE])[0]
+                ws = str(qs.get("workspace_id", [""])[0] or "").strip()
+                if not ws:
+                    return self._send(400, {"error": "workspace_id is required for kb/contracts"})
                 k = int(qs.get("k", ["20"])[0])
                 st, mems = UP.list_memories(ws)
                 if st != 200:
@@ -437,7 +442,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "query is required"})
                 k = int(body.get("k") or 5)
                 mode = str(body.get("mode") or "auto")
-                ws = str(body.get("workspace_id") or UP.DEFAULT_WORKSPACE)
+                ws = str(body.get("workspace_id") or "").strip()
+                if not ws:
+                    return self._send(400, {"error": "workspace_id is required for kb/query"
+                                                     "（留空会查到别的区或查不到，故要求显式传入）"})
                 lib = body.get("library") or None
                 # 本地知识（向量+RRF）——knowledge-only / hybrid
                 local_results = []

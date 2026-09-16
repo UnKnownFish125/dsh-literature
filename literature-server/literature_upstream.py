@@ -19,7 +19,11 @@ MEMORY_URL = os.environ.get("LITERATURE_MEMORY_URL", "http://127.0.0.1:6230")
 MEMORY_TOKEN_FILE = os.environ.get("LITERATURE_MEMORY_API_TOKEN_FILE",
                                    os.path.join(DATA_DIR, "memory-api-token"))
 TIMEOUT = float(os.environ.get("LITERATURE_UPSTREAM_TIMEOUT", "10"))
-DEFAULT_WORKSPACE = os.environ.get("LITERATURE_DEFAULT_WORKSPACE", "deepseek-harness")
+# 幻影值已移除（2026-09-16）。此前默认 "deepseek-harness" 是不存在的工作区：
+# 查询落空导致"明明有 121 条知识却查不到"；而改成空串同样危险——实测上游
+# /v1/memories/list 对空 workspace_id 会返回**任意工作区**的数据（不是全部），
+# 会让 bias 注入拉到错区记忆。故此处保留空值仅作占位，调用方必须显式传 ws。
+DEFAULT_WORKSPACE = os.environ.get("LITERATURE_DEFAULT_WORKSPACE", "")
 
 
 def read_memory_token():

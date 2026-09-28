@@ -32,6 +32,17 @@ FASTEMBED_CACHE = os.environ.get(
     "/opt/AstrBot/fastembed_cache",
 )
 
+# ── embedding provider 配置（新增：api = OpenAI 兼容 /v1/embeddings）─────────
+# local（默认）= fastembed jina-embeddings-v2-base-zh；api = 本机 llama.cpp bge-m3 等
+EMBED_PROVIDER = os.environ.get("LITERATURE_EMBED_PROVIDER", "local").strip().lower()
+EMBED_API_BASE = os.environ.get("LITERATURE_EMBED_API_BASE", "").rstrip("/")
+EMBED_API_MODEL = os.environ.get("LITERATURE_EMBED_API_MODEL", "")
+EMBED_API_KEY = os.environ.get("LITERATURE_EMBED_API_KEY", "")
+try:
+    EMBED_API_BATCH = max(1, int(os.environ.get("LITERATURE_EMBED_API_BATCH", "32")))
+except ValueError:
+    EMBED_API_BATCH = 32
+
 _lock = threading.Lock()
 _embed_model = None
 _index = None
@@ -50,20 +61,66 @@ def _load_embed_model():
     return _embed_model
 
 
-def _write_dim():
+def _write_dim(dim=None):
     with open(DIM_PATH, "w", encoding="utf-8") as fh:
-        json.dump({"dim": KNOWLEDGE_DIM}, fh)
+        json.dump({"dim": int(dim or KNOWLEDGE_DIM)}, fh)
+
+
+def _l2_normalize(vecs):
+    """L2 归一化（IndexFlatIP 下等价余弦）；零向量保持原样。"""
+    out = []
+    for v in vecs:
+        a = np.asarray(v, dtype=np.float32)
+        n = float(np.linalg.norm(a))
+        out.append(a / n if n > 1e-12 else a)
+    return out
+
+
+def _embed_api(texts):
+    """OpenAI 兼容 /v1/embeddings（provider=api）。分批发送，避免单请求过大。"""
+    import urllib.request
+
+    if not EMBED_API_BASE or not EMBED_API_MODEL:
+        raise RuntimeError("LITERATURE_EMBED_PROVIDER=api 需要 LITERATURE_EMBED_API_BASE 与 LITERATURE_EMBED_API_MODEL")
+    key = EMBED_API_KEY or "local-noauth"
+    out = []
+    total = len(texts)
+    for start in range(0, total, EMBED_API_BATCH):
+        chunk = texts[start:start + EMBED_API_BATCH]
+        body = json.dumps({"model": EMBED_API_MODEL, "input": chunk}).encode("utf-8")
+        req = urllib.request.Request(
+            EMBED_API_BASE + "/embeddings",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                "embedding API 第 %d 批失败（offset=%d, size=%d, total=%d）: %s"
+                % (start // EMBED_API_BATCH + 1, start, len(chunk), total, e)
+            ) from e
+        items = sorted(payload.get("data") or [], key=lambda x: x.get("index", 0))
+        if len(items) != len(chunk):
+            raise RuntimeError("embedding API 返回条数不符：期望 %d，实际 %d（offset=%d）" % (len(chunk), len(items), start))
+        out.extend(np.asarray(it["embedding"], dtype=np.float32) for it in items)
+    if not out:
+        raise RuntimeError("embedding API 返回空结果")
+    return out
 
 
 def embed_texts(texts):
-    """文本 → 向量（list[np.ndarray float32]）。"""
+    """文本 → 归一化向量（list[np.ndarray float32]）。"""
     if not texts:
         return []
-    model = _load_embed_model()
-    raw = list(model.embed([str(t) for t in texts]))
-    return [np.asarray(v, dtype=np.float32) for v in raw]
-
-
+    if EMBED_PROVIDER == "api":
+        raw = _embed_api([str(t) for t in texts])
+    else:
+        model = _load_embed_model()
+        raw = [np.asarray(v, dtype=np.float32) for v in model.embed([str(t) for t in texts])]
+    return _l2_normalize(raw)
 def _ensure_index(dim=None):
     global _index, _index_loaded
     dim = dim or KNOWLEDGE_DIM
@@ -79,7 +136,7 @@ def _ensure_index(dim=None):
                 pass  # 损坏则重建
         _index = faiss.IndexIDMap(faiss.IndexFlatIP(dim))
         _index_loaded = True
-        _write_dim()
+        _write_dim(dim)
     return _index
 
 
@@ -150,7 +207,7 @@ def rebuild(ids_texts):
         idx.add_with_ids(mat, ids_arr)
     _index = idx
     _index_loaded = True
-    _write_dim()
+    _write_dim(idx.d)
     _save()
     return len(ids_texts)
 

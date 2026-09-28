@@ -191,6 +191,13 @@ function short(value, length) {
   return text.length > length ? text.slice(0, length) + '…' : text
 }
 
+function fmtSize(bytes) {
+  const b = Number(bytes) || 0
+  if (b < 1024) return b + ' B'
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'
+  return (b / 1048576).toFixed(1) + ' MB'
+}
+
 function isArchived(item) { return !!item && (item.archived === 1 || item.archived === true || String(item.archived) === 'true') }
 function libraryColor(library) { return LIB_COLOR[library] || LIB_COLOR.unknown }
 function message(error) { return String(error && error.message || error) }
@@ -1150,10 +1157,37 @@ const LIFECYCLE_LABEL = { draft: '草稿', active: '生效', deprecated: '已弃
 const REVIEW_LABEL = { pending: '待审核', approved: '已审核', rejected: '已拒绝' }
 const SOURCE_LABEL = { github: 'GitHub', distilled: '蒸馏', manual: '手工', imported: '导入' }
 
-function SkillView(props) {
+// 错误边界：SkillView 里任何渲染异常都不再让面板变黑，而是把错误显示出来。
+// （此前"点技能 → 整个 Tab 全黑"就是异常被 DSH 错误边界吞掉，看不到原因。）
+class SkillErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { err: '' }
+  }
+  static getDerivedStateFromError(err) {
+    return { err: String((err && err.message) || err) }
+  }
+  componentDidCatch(err, info) {
+    try { console.error('[literature] SkillView 渲染异常:', err, info) } catch (e) {}
+  }
+  render() {
+    if (this.state.err) {
+      return h('div', { className: 'dsh-lit-stack' },
+        h('div', { className: 'dsh-lit-notice dsh-lit-notice-error', role: 'alert' },
+          h('strong', null, '技能页渲染出错：'),
+          h('div', { className: 'dsh-lit-content', style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } },
+            this.state.err)),
+        h(Button, { icon: 'refresh', title: '重试', onClick: () => this.setState({ err: '' }) }, '重试'))
+    }
+    return this.props.children
+  }
+}
+
+function SkillViewInner(props) {
   const [scope, setScope] = React.useState('')
   const [lifecycle, setLifecycle] = React.useState('')
   const [selected, setSelected] = React.useState('')
+  const [filePath, setFilePath] = React.useState('')
   const [busy, setBusy] = React.useState('')
   const [notice, setNotice] = React.useState(null)
 
@@ -1185,7 +1219,7 @@ function SkillView(props) {
   }
 
   const items = list(skills.data && skills.data.skills)
-  const d = detail.data
+  const d = detail.data || null
 
   const filters = h('div', { className: 'dsh-lit-actions' },
     h('label', { className: 'dsh-lit-field' }, '范围',
@@ -1205,8 +1239,10 @@ function SkillView(props) {
     : h('div', { className: 'dsh-lit-stack' }, items.map(function (item) {
       return h('button', {
         key: item.id, type: 'button',
+        title: '点击查看详情',
+        style: { cursor: 'pointer', textAlign: 'left', width: '100%', display: 'block' },
         className: 'dsh-lit-box' + (selected === item.id ? ' dsh-lit-graphbox-selected' : ''),
-        onClick: function () { setSelected(item.id) },
+        onClick: function () { setSelected(item.id); setFilePath('') },
       },
         h('div', { className: 'dsh-lit-title' }, '🧩 ' + (item.title || item.slug)),
         h('div', { className: 'dsh-lit-mini' },
@@ -1218,6 +1254,14 @@ function SkillView(props) {
   const detailBox = !selected ? h('div', { className: 'dsh-lit-muted' }, '选择左侧技能查看详情')
     : detail.loading ? h('div', { className: 'dsh-lit-muted' }, '加载中…')
     : detail.error ? h(Notice, { text: detail.error, error: true, retry: detail.reload })
+    : (!d || !d.skill)
+      // 防御：useResource 的初始 state 与每次重载都会把 data 置 null，
+      // 此前这里直接读 d.skill，导致 "Cannot read properties of null (reading 'skill')"
+      // 把整个技能面板打黑（2026-09-17 实报）。
+      ? h('div', { className: 'dsh-lit-stack' },
+        h('div', { className: 'dsh-lit-muted' },
+          '未能加载该技能详情（可能无权限、已删除，或工作区不匹配）'),
+        h(Button, { icon: 'refresh', title: '重试', onClick: detail.reload }, '重试'))
     : h('div', { className: 'dsh-lit-stack' },
       h(Section, { title: d.skill.title || d.skill.slug },
         h(KV, { rows: [
@@ -1288,8 +1332,18 @@ function SkillView(props) {
     h(Notice, { text: skills.error, error: true, retry: skills.reload }),
     h(Notice, { text: notice && notice.text, error: notice && notice.error, success: notice && !notice.error }),
     filters,
-    h('div', { className: 'dsh-lit-stack' }, listBox),
-    h('div', { className: 'dsh-lit-stack' }, detailBox))
+    // 主从布局：列表在左、详情在右。
+    // 此前两者是上下堆叠，点列表项后详情渲染在屏幕下方，用户以为"点不动"。
+    h('div', {
+      style: { display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-start' },
+    },
+      h('div', { style: { flex: '1 1 200px', minWidth: '200px' }, className: 'dsh-lit-stack' }, listBox),
+      h('div', { style: { flex: '1 1 300px', minWidth: '300px' }, className: 'dsh-lit-stack' }, detailBox)))
+}
+
+
+function SkillView(props) {
+  return h(SkillErrorBoundary, null, h(SkillViewInner, props))
 }
 
 const TABS = [
@@ -1500,10 +1554,16 @@ function apply(ctx) {
       function (props) { return h(LiteraturePanel, props) },
     )
   })
-  slots.inject('settings.plugin.item', function* () {
-    yield slots.register(
-      { name: 'settings.plugin.item', id: 'literature', key: 'literature', order: 60, label: 'literature 文献库' },
-      function () { return h(ConfigView, {}) },
+  // 设置 → 插件。0.1.7 起旧槽 `settings.plugin.item` 已删除，改用插件页的 `plugins.item`
+  // 列表槽：注册项以「内嵌视图」参与渲染——view==='summary' 取其一行描述，其余渲染整卡。
+  // 旧代码的 key 与第三个「注册条件」参数在新槽不存在，generator 形式也不再需要。
+  slots.inject('plugins.item', function () {
+    return slots.register(
+      { name: 'plugins.item', id: 'literature', order: 60, label: () => 'literature 文献库' },
+      function (props) {
+        if (props && props.view === 'summary') return '文献库与知识图谱配置（数据来自 literature-server）'
+        return h(ConfigView, {})
+      },
     )
   })
 }

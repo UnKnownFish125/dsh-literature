@@ -110,15 +110,106 @@ v0.1 方案：`docs/dsh-literature-skill-management-v01.md`
 | **P1** | **库内版本 ≠ 运行版本**——目录解析错误、优先级遮蔽、未受管文件覆盖、半部署、只读假退役 | 独立部署记录、内容 hash、原生加载核验、原子发布、可回滚、真正移出扫描根 |
 | **P1** | **错误反馈驱动错误归档**——加载算成功、漏 `/slug`、LLM 自评替代结果、draft 入库即归档 | 版本化事件、独立 outcome 证据、unknown 状态、样本门槛；**首周禁止自动淘汰** |
 
-## 七、待确认决策点（少数）
+## 七、数据来源与采集契约
 
-| # | 决策 | 我的建议 |
-|---|---|---|
-| 1 | **部署目标根** | 专用受管目录（如 `/www/dsh/skills-managed`）+ 通过 `customSkillDirs`(rank 300) 注册；**不用** `~/.agents/skills`(500，易被项目遮蔽) |
-| 2 | **首周是否含自动部署** | 含（PR2），但**单机单写者 + 人工触发**；多实例下期 |
-| 3 | **skill 默认 scope** | 默认 `workspace` 私有；publish global 需显式批准 |
-| 4 | **MVP 是否支持 bundle** | 不支持——明确拒绝，避免静默丢脚本 |
-| 5 | **是否本周接 deepmemory 蒸馏** | 只做**手动** `/memory distill` → draft；自动成熟判定下期 |
+### 7.1 数据从哪来（实测：会话日志事件类型）
+
+DSH 会话日志 `sessions/<cwd>/<sid>/session.jsonl.zstd` 实测事件类型：
+`assistant/chunk` / `assistant/message` / `user/message` / `tool/call` / `tool/result` / `tool-call-chunks` / `step/start` / `step/end` / `turn/start` / `session` / `session/title` / `sandbox/mode` / `permission/preset` / `subagent/*` / `agent/inbox/spliced`
+
+**结论：对话与轨迹已覆盖大部分数据需求。**
+
+| 层 | 要收什么 | 来源 | 可得性 |
+|---|---|---|---|
+| 加载 | 技能加载次数、时间、会话/轮次 | `tool/call`(name=`skill`) + `tool/result` | ✅ |
+| 加载（另一路径） | 用户 `/slug` 直接调用 | `user/message` 解析 `/slug` | ✅（需解析） |
+| 应用 | 是否真按技能步骤执行 | 轨迹后续 tool 调用序列 vs 技能步骤 | ⚠️ 需推断 |
+| 结果 | 任务成功/失败 | `user/message` 反馈（修正/确认/否定） | ⚠️ 信号弱，需显式评价补强 |
+| 版本 | 用了哪个版本 | **轨迹无 version/hash** | ❌ 需部署记录 + 时间窗 |
+
+### 7.2 三个缺口与补法
+
+| 缺口 | 补法 |
+|---|---|
+| 版本关联 | 部署时记录「何时部署哪个版本」（`skill_deployments`）→ 用**时间窗**关联加载事件；无法确定时记 **unknown**，禁止按 slug 关联到最新版 |
+| 任务结果 | 用户反馈为主：修正词（"不对/应该是"）→ 负信号；确认词（"可以/就这样"）→ 正信号；外加**显式评价**（人工打星） |
+| 应用层 | 先简单规则（技能正文里的命令是否出现在后续 bash 调用中），后续再优化 |
+
+### 7.3 职责划分（避免双写）
+
+```
+┌──────────────────────────────────────────────┐
+│ 日志注入插件（会话创建时注入，用户侧实现）      │
+│  · 监听 tool/call、tool/result、user/message  │
+│  · 提取 skill 加载 / /slug 调用 / 用户反馈     │
+│  · 携带 session_id、turn_id、时间戳            │
+└───────────────────┬──────────────────────────┘
+                    │ POST /v1/skill-events（幂等 event_key）
+                    ▼
+┌──────────────────────────────────────────────┐
+│ literature（只做存储 + 分析）                  │
+│  · skill_usage_events（去重事件）              │
+│  · skill_deployments（版本时间窗）             │
+│  · 统计 / 效果评估 / 优化建议                  │
+└──────────────────────────────────────────────┘
+```
+
+**literature 不直接读会话日志**（避免重复采集与权限问题）。
+
+### 7.4 接口契约
+
+**事件上报** `POST /v1/skill-events`
+```json
+{
+  "producer_id": "log-injector-v1",
+  "event_key": "session-4cb6d508:turn3:call_9wjC...",
+  "event_kind": "load",
+  "invocation_kind": "tool",
+  "skill_name": "plot-chart",
+  "skill_version_id": null,
+  "observed_content_hash": null,
+  "session_id": "session-4cb6d508-...",
+  "turn_id": "turn-3",
+  "tool_call_id": "call_9wjC...",
+  "workspace_id": "bf4722bc-...",
+  "occurred_at": 1788925050915
+}
+```
+
+**反馈上报** `POST /v1/skill-evaluations`
+```json
+{
+  "skill_version_id": 12,
+  "kind": "task_outcome",
+  "outcome": "success",
+  "reviewer_id": "user",
+  "evidence_ref": "session-4cb6d508:turn-3",
+  "comment": "生成的图直接可用",
+  "created_at": 1788925100000
+}
+```
+
+**硬约定**（均来自实测踩坑）：
+1. `event_key` 必须幂等——重复上报不翻倍
+2. `skill_version_id` 不确定就 `null`——**禁止按 slug 关联最新版**
+3. `workspace_id` 按 `#668` 规则解析（`DSH_SESSION_ID` → `workspace.json`）——**禁止兜底假值**
+4. 用户 `/slug` 调用**必须上报**（`invocation_kind: "slash"`），否则漏计
+
+## 七之二、已确认决策（2026-09-09 用户拍板）
+
+| # | 决策 | 用户决定 | 执行要点 |
+|---|---|---|---|
+| 1 | 部署目标根 | **C**：受管目录 + `customSkillDirs` | 目录待定（建议 `/www/dsh/skills-managed`）；用户后续另写"日志注入插件"负责加载 |
+| 2 | 首周范围 | 收集提炼 + 部署 + **开始收数据** | 后续按第一周数据引导优化 |
+| 3 | 默认 scope | **A**：workspace 私有 | "通用的会转向全局" → 需**分类维度**支持 `私有→候选通用→审核→global` |
+| 4 | bundle（多文件） | **支持**（修正原建议） | 用户场景为"带 skill 做事收数据"，多文件技能常见；改用**整包目录原子替换** + manifest |
+| 5 | deepmemory 蒸馏 | **手动** | 蒸馏成功标准待定，首周不做自动判定 |
+
+**bundle 支持的具体设计**：
+- 存储：`/www/dsh/skill-packages/<slug>/<version>/`（整包）+ 库内 `manifest_json`（文件清单 + 单文件 hash + 整包 hash）
+- 部署：写临时目录 → **目录级 rename**（同文件系统内原子）
+- 安全：导入时静态扫描路径穿越（`..`）、绝对路径、符号链接、可疑命令；**默认不自动执行包内脚本**
+- 拒绝条件：超大小/文件数上限、含符号链接、路径穿越——**不再拒绝多文件本身**
 
 ## 八、参考
 

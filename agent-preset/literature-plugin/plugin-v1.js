@@ -93,6 +93,23 @@ function needWs(args) {
   return ws
 }
 
+/** id 入参归一（P5）：单 id / 数字字符串 / "1,2" / 数组 → 去重 int 数组（保序）。 */
+function normalizeIds(value) {
+  let raw
+  if (Array.isArray(value)) raw = value
+  else if (value === undefined || value === null || value === '') raw = []
+  else if (typeof value === 'string' && value.includes(',')) raw = value.split(',')
+  else raw = [value]
+  const out = []
+  for (const v of raw) {
+    if (v === undefined || v === null || v === '') continue
+    const n = Number(v)
+    if (!Number.isInteger(n)) throw new Error(`knowledge id 必须是整数: ${JSON.stringify(v)}`)
+    if (!out.includes(n)) out.push(n)
+  }
+  return out
+}
+
 export function apply(ctx) {
   const outSchema = { type: 'object', additionalProperties: true }
   const textRender = (value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }]
@@ -183,18 +200,48 @@ export function apply(ctx) {
 
   ctx.effect(() => ctx.tools.register(defineTool({
     name: 'literature_link_evidence',
-    description: 'Attach an evidence (claim/quote with stance) to a document for the current discussion. Optionally create a knowledge item from it.',
+    description:
+      'Attach ONE evidence (claim/quote with stance) to one or MORE knowledge points. '
+      + 'Idempotent on the (claim, stance) PAIR: the same normalized claim (strip + collapse whitespace + lowercase) WITH the same stance '
+      + 'REUSES the existing evidence row instead of creating a duplicate, so the same evidence row can back several knowledge points. '
+      + 'The SAME claim with a DIFFERENT stance creates a SEPARATE row — never fold an opposite stance into an existing row (both rows must stay). '
+      + 'Attach to existing knowledge items by id (knowledge_ids / knowledge_id), or create new ones by concept / concepts. '
+      + 'IMPORTANT — conflicting evidence must be captured, never skipped: if the document contains anything that contradicts existing knowledge, '
+      + 'narrows or qualifies a claim, or is a counter-example / negative result / failed reproduction / stated limitation, '
+      + 'extract it as its OWN evidence row with stance="contradicting". '
+      + 'Do NOT fold it into a supporting row, and do NOT leave it at the default "contextual" just because it reads as a limitation. '
+      + 'Positive example: quote "naive full-context caching … can paradoxically increase latency" '
+      + '=> {claim: "Naive full-context caching can paradoxically increase latency.", stance: "contradicting", relation: "反驳"}. '
+      + 'Negative example: labelling that same quote "supporting", or dropping it because "it is only a limitation", is WRONG. '
+      + 'contradicting means conflicting / negating / boundary-narrowing claims — it is NOT about negative wording. '
+      + 'When you also create a knowledge item, set relation to one of the 6 controlled words ONLY: '
+      + '支持 (supports) | 反驳 (refutes) | 细化 (refines) | 依赖 (depends on) | 替代 (replaces) | 同义 (synonymous); '
+      + 'direction is source = this evidence/knowledge, target = the referenced existing knowledge. '
+      + 'Keep stance and relation consistent: supporting => 支持, contradicting => 反驳, contextual => relation may be empty. '
+      + 'Never emit a vague relation such as 相关. Vocabulary + prompt fragments: /www/dsh-literature-deploy/literature-server/RELATION_VOCAB.md (§5.A/§5.B).',
     parameters: {
-      claim: { type: 'string', required: true, description: 'The claim in one sentence.' },
-      stance: { type: 'string', description: 'supporting | contradicting | contextual', default: 'contextual' },
+      claim: { type: 'string', required: true, description: 'The claim in one sentence. Same normalized claim + same stance reuses the existing evidence row (no duplicate); the same claim with a different stance creates a separate row.' },
+      stance: {
+        type: 'string',
+        description:
+          'supporting | contradicting | contextual. The default "contextual" is ONLY for neutral background / method / data claims. '
+          + 'You MUST use "contradicting" for any counter-example, negative result, conflicting conclusion, boundary or qualifying condition, '
+          + 'or author-stated limitation found in the document — extract each of those as a SEPARATE evidence row. '
+          + 'When unsure, do not downgrade a contradicting item to supporting/contextual; downgrade the relation instead (leave it empty).',
+        default: 'contextual',
+      },
       evidence_text: { type: 'string', description: 'Original quote with source location.' },
       doc_id: { type: 'integer', description: 'Document id this evidence maps to.' },
-      concept: { type: 'string', description: 'If given, also create a knowledge item with this concept.' },
+      concept: { type: 'string', description: 'Legacy single knowledge point: if given, also create a knowledge item with this concept (kept for backwards compatibility).' },
+      concepts: { type: 'array', description: 'Create one knowledge item per concept; all of them attach to the SAME evidence row (one evidence → several knowledge points).' },
+      knowledge_ids: { type: 'array', description: 'Ids of EXISTING knowledge items to attach this evidence to (a single integer is also accepted).' },
+      knowledge_id: { type: 'integer', description: 'Single existing knowledge item id — scalar form of knowledge_ids, kept for backwards compatibility.' },
       workspace_id: WS_PARAM,
     },
     output: { schema: outSchema, render: (args, value) => textRender(value) },
     async execute(args) {
       const ws = needWs(args)
+      // 1) 一条 evidence：同 claim 幂等复用既有行（不再每次新建重复行）
       const ev = await api('/evidence', {
         method: 'POST',
         body: {
@@ -202,13 +249,51 @@ export function apply(ctx) {
           evidence_text: args.evidence_text || '', doc_id: args.doc_id, workspace_id: ws,
         },
       })
-      const result = { ok: true, evidence_id: ev.evidence.id, workspace_id: ws }
-      if (args.concept) {
+      const evidenceId = ev.evidence.id
+      const result = { ok: true, evidence_id: evidenceId, reused: !!ev.reused, workspace_id: ws }
+      if (ev.stance_conflict) {
+        // 同 claim 但本次 stance 与既有行不同：显式回报，不静默丢信息（不改既有行）
+        result.stance_conflict = true
+        result.stance = ev.evidence.stance
+        result.stance_requested = ev.stance_requested
+      }
+
+      // 2) 新建知识点（老写法 concept + 新写法 concepts 列表）→ 全部挂到同一条 evidence
+      const concepts = []
+      const pushConcept = (c) => {
+        const s = String(c === undefined || c === null ? '' : c).trim()
+        if (s && !concepts.includes(s)) concepts.push(s)
+      }
+      if (args.concept) pushConcept(args.concept)
+      const extra = Array.isArray(args.concepts) ? args.concepts : (args.concepts ? [args.concepts] : [])
+      for (const c of extra) pushConcept(c)
+
+      const createdIds = []
+      for (const concept of concepts) {
         const kn = await api('/knowledge', {
           method: 'POST',
-          body: { concept: args.concept, summary: args.claim, sources: [ev.evidence.id], workspace_id: ws },
+          body: { concept, summary: args.claim, sources: [evidenceId], workspace_id: ws },
         })
-        result.knowledge_id = kn.knowledge.id
+        createdIds.push(kn.knowledge.id)
+      }
+
+      // 3) 挂到**已有**知识点：knowledge_ids（列表/单值）+ knowledge_id（单 id 老写法）
+      const targets = normalizeIds(args.knowledge_ids).concat(normalizeIds(args.knowledge_id))
+      const linkIds = [...new Set(targets)].filter((id) => !createdIds.includes(id))
+      let linkedIds = []
+      if (linkIds.length) {
+        const link = await api(`/evidence/${encodeURIComponent(evidenceId)}/sources`, {
+          method: 'POST',
+          body: { knowledge_ids: linkIds, workspace_id: ws },
+        })
+        linkedIds = (link.linked || []).concat(link.relinked || [])
+        result.already_linked = link.already || []
+      }
+
+      const allIds = createdIds.concat(linkedIds)
+      if (allIds.length) {
+        result.knowledge_ids = allIds     // P5：这条 evidence 挂上的全部知识点
+        result.knowledge_id = allIds[0]   // 老字段：单个知识点调用方读它，保持兼容
       }
       return result
     },

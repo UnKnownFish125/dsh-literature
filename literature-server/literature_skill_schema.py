@@ -222,8 +222,46 @@ _MIGRATION_2 = [
     "ALTER TABLE skill_versions ADD COLUMN layer_model TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE skill_versions ADD COLUMN layers_generated_at REAL",
 ]
+_MIGRATION_3 = [
+    # 标签：人按标签筛，agent 的嵌入文本也带标签（两个世界共用）
+    """
+    CREATE TABLE IF NOT EXISTS skill_tags (
+      skill_id TEXT NOT NULL,
+      tag      TEXT NOT NULL,
+      PRIMARY KEY (skill_id, tag)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_skill_tags_tag ON skill_tags(tag)",
+
+    # 向量索引：每版本一份，派生物可随时重建。vec 为 NULL 且 status='failed' 表示待重试。
+    """
+    CREATE TABLE IF NOT EXISTS skill_vectors (
+      skill_version_id INTEGER PRIMARY KEY,
+      model      TEXT NOT NULL DEFAULT '',
+      dim        INTEGER NOT NULL DEFAULT 0,
+      vec        BLOB,
+      text_hash  TEXT NOT NULL DEFAULT '',
+      status     TEXT NOT NULL DEFAULT 'pending'
+                 CHECK(status IN ('pending','ok','failed','stale')),
+      error      TEXT NOT NULL DEFAULT '',
+      built_at   REAL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_skill_vectors_status ON skill_vectors(status)",
+
+    # 关键词索引（给人）：普通 FTS5 表 + UNINDEXED 的版本 id。
+    # 不用 external content——技能版本数少、写入路径集中，简单直接反倒不容易错。
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS skill_search_fts USING fts5(
+      skill_version_id UNINDEXED,
+      name, summary_l0, overview_l1, tags, category,
+      tokenize='trigram'
+    )
+    """,
+]
+
 MIGRATIONS[2] = _MIGRATION_2
-SCHEMA_VERSION = 2
+MIGRATIONS[3] = _MIGRATION_3
 
 
 def _applied_versions(conn):

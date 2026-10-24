@@ -1,6 +1,7 @@
 // dsh-literature agent 工具载体（contract-v0.2 §4.4 冻结 + v1.2 修复）
 // 工具：literature_add / literature_search / literature_attach /
-//       literature_update / literature_link_evidence
+//       literature_update / literature_link_evidence /
+//       literature_skill_search / literature_skill_load（技能按需检索，默认零注入）
 //
 // 【v1.2 关键修复 2026-09-16】
 // 1) 补 export const inject = ['tools']（此前缺失，与 kb 插件不一致）。
@@ -195,6 +196,57 @@ export function apply(ctx) {
       const body = { ...(args.patch || {}), workspace_id: ws }
       const updated = await api(`/documents/${encodeURIComponent(args.document_id)}`, { method: 'PATCH', body })
       return { ok: true, document_id: args.document_id, workspace_id: ws, document: updated.document }
+    },
+  })))
+
+  // ── 技能按需检索/加载（默认零注入：技能不进 system prompt，由模型自己决定要不要找）──
+  // 设计意图：不要把所有技能正文塞进上下文。模型先按「我要做什么」检索，
+  // 只拿回 name + 一句话摘要；确认相关后再 load 正文。k 服务端夹断到 8。
+  ctx.effect(() => ctx.tools.register(defineTool({
+    name: 'literature_skill_search',
+    description: [
+      'Search the available skill catalog by DESCRIBING THE TASK (semantic match, not keyword).',
+      'Returns only skill name + a one-line summary; it does NOT return instructions.',
+      'Call this once when a task might match a reusable procedure you have not loaded yet.',
+      'Do NOT call it repeatedly for the same task; then call literature_skill_load on the best match.',
+    ].join(' '),
+    parameters: {
+      query: {
+        type: 'string', required: true,
+        description: 'What you are trying to accomplish, in natural language (e.g. "从论文全文抽逐字证据并带锚点").',
+      },
+      k: { type: 'integer', description: 'Max skills to return (1-8).', default: 5 },
+      tag: { type: 'string', description: 'Optional tag filter.' },
+    },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
+    async execute(args) {
+      const data = await api('/skill-agent/search', {
+        method: 'POST',
+        body: { query: String(args.query || ''), k: args.k || 5, tag: args.tag || undefined },
+      })
+      return { ok: true, k: data.k, count: (data.results || []).length,
+               results: data.results || [], note: data.note || '' }
+    },
+  })))
+
+  ctx.effect(() => ctx.tools.register(defineTool({
+    name: 'literature_skill_load',
+    description: [
+      'Load the instructions of a skill returned by literature_skill_search.',
+      'Default layer="l1" returns the compact overview (when to use / prerequisites / steps / output).',
+      'Use layer="l2" ONLY when the overview is clearly insufficient — l2 is the full SKILL.md and can be 40x larger.',
+    ].join(' '),
+    parameters: {
+      name: { type: 'string', required: true, description: 'Exact skill name from literature_skill_search results.' },
+      layer: { type: 'string', description: '"l1" (default, overview) or "l2" (full text).', default: 'l1' },
+    },
+    output: { schema: outSchema, render: (args, value) => textRender(value) },
+    async execute(args) {
+      const data = await api('/skill-agent/load', {
+        method: 'POST',
+        body: { name: String(args.name || ''), layer: String(args.layer || 'l1') },
+      })
+      return data
     },
   })))
 

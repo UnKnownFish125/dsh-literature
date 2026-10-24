@@ -23,6 +23,7 @@ import literature_skill_routes as SKILL_ROUTES  # skill 管理体系路由（v0.
 import literature_chain_routes as CHAIN_ROUTES  # 认识演进链路由（阶段 3.1）
 import literature_job_routes as JOB_ROUTES  # 长任务监控路由（阶段 4.2）
 import literature_experiment_routes as EXP_ROUTES  # 实验裁决路由
+import literature_skill_search_routes as SKILL_SEARCH_ROUTES  # 技能检索路由（关键词给人/语义给 agent）
 
 from literature_domain import (
     ConflictError,
@@ -347,6 +348,9 @@ class Handler(BaseHTTPRequestHandler):
             # 实验裁决路由
             if EXP_ROUTES.try_handle(self, self.command, parts, qs):
                 return
+            # 技能检索（关键词）：给管理界面用
+            if SKILL_SEARCH_ROUTES.try_handle(self, self.command, parts, qs):
+                return
 
             # ==== kb 查询路由（单服务合并，deepmemory 上游，H2 kb-server 归入 6260）====
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "browse":
@@ -495,6 +499,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
             if parts and parts[0] == "v1" and len(parts) >= 3 and parts[2] == "experiments":
                 if EXP_ROUTES.try_handle(self, self.command, parts, qs, body=self._read_body()):
+                    return
+            if parts and parts[0] == "v1" and len(parts) >= 3 and parts[2] in ("skill-search", "skill-agent"):
+                if SKILL_SEARCH_ROUTES.try_handle(self, self.command, parts, qs, body=self._read_body()):
                     return
             store = get_store()
 
@@ -761,8 +768,23 @@ class Handler(BaseHTTPRequestHandler):
         })
 
 
+def _install_skill_schema_safely():
+    """应用 skill 相关迁移（含技能检索索引）。
+
+    修 P0-1：此前 main() 从不调用 ensure_skill_schema，导致 /v1/skills 一律 500。
+    失败不能让服务起不来（skill 是可选功能），但必须打印原因，不静默。
+    """
+    try:
+        import literature_skill_schema as SS
+        frm, to, applied = SS.ensure_skill_schema(DB_PATH, note="server-startup")
+        print("skill schema: %s -> %s (applied=%s)" % (frm, to, applied or "none"), flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print("WARNING: skill schema 迁移失败（skill 接口将不可用）: %s" % exc, flush=True)
+
+
 def main():
     init_db()
+    _install_skill_schema_safely()
     httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"literature server listening on {PORT} (db={DB_PATH})", flush=True)
     try:

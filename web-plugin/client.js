@@ -2345,14 +2345,36 @@ class SkillErrorBoundary extends React.Component {
 function SkillViewInner(props) {
   const [scope, setScope] = React.useState('')
   const [lifecycle, setLifecycle] = React.useState('')
+  const [q, setQ] = React.useState('')
   const [selected, setSelected] = React.useState('')
   const [filePath, setFilePath] = React.useState('')
   const [busy, setBusy] = React.useState('')
   const [notice, setNotice] = React.useState(null)
 
+  // 有搜索词时走关键词检索（完全名 > 前缀 > FTS > 标签，确定性排序）；
+  // 无搜索词时走原来的全量列表。两条路结果字段不同，这里归一成同一形状。
   const skills = useResource(function () {
-    return api('/skills' + qs({ workspace_id: props.workspaceId, scope: scope, lifecycle: lifecycle }))
-  }, [props.workspaceId, scope, lifecycle])
+    const term = String(q || '').trim()
+    if (!term) {
+      return api('/skills' + qs({ workspace_id: props.workspaceId, scope: scope, lifecycle: lifecycle }))
+    }
+    return api('/skill-search' + qs({
+      q: term, limit: 100,
+      lifecycle: lifecycle || '',
+      workspace_id: props.workspaceId,
+    })).then(function (data) {
+      const rows = list(data && data.skills).map(function (x) {
+        return {
+          id: x.skill_id, slug: x.name, title: x.title || x.name,
+          summary_l0: x.l0, description: x.description,
+          scope: x.scope, lifecycle: x.lifecycle,
+          active_version_id: x.version_id,
+          visibility: x.visibility, tier: x.tier, apply_90d: x.apply_90d,
+        }
+      })
+      return { skills: rows, count: rows.length, __search: true }
+    })
+  }, [props.workspaceId, scope, lifecycle, q])
 
   const detail = useResource(function () {
     if (!selected) return Promise.resolve(null)
@@ -2381,6 +2403,16 @@ function SkillViewInner(props) {
   const d = detail.data || null
 
   const filters = h('div', { className: 'dsh-lit-actions' },
+    h('label', { className: 'dsh-lit-field' }, '搜索',
+      h('input', {
+        className: 'dsh-lit-input',
+        type: 'search',
+        value: q,
+        placeholder: '技能名 / 标签 / 描述关键词',
+        'aria-label': '关键词搜索技能',
+        style: { minWidth: '220px' },
+        onChange: function (e) { setQ(e.target.value) },
+      })),
     h('label', { className: 'dsh-lit-field' }, '范围',
       h('select', { className: 'dsh-lit-select', value: scope, 'aria-label': '范围', onChange: function (e) { setScope(e.target.value) } },
         h('option', { value: '' }, '全部'),
@@ -2394,7 +2426,9 @@ function SkillViewInner(props) {
         }))))
 
   const listBox = skills.loading ? h('div', { className: 'dsh-lit-muted' }, '加载中…')
-    : !items.length ? h(Empty, null, '暂无技能（先导入 GitHub 素体或从记忆蒸馏产生 draft）')
+    : !items.length ? h(Empty, null, String(q || '').trim()
+        ? '没有匹配「' + String(q).trim() + '」的技能（关键词路是确定性的：不命中就不返回）'
+        : '暂无技能（先导入 GitHub 素体或从记忆蒸馏产生 draft）')
     : h('div', { className: 'dsh-lit-stack' }, items.map(function (item) {
       return h('button', {
         key: item.id, type: 'button',
@@ -2406,7 +2440,9 @@ function SkillViewInner(props) {
         h('div', { className: 'dsh-lit-title' }, '🧩 ' + (item.title || item.slug)),
         h('div', { className: 'dsh-lit-mini' },
           (SCOPE_LABEL[item.scope] || item.scope) + ' · ' + (LIFECYCLE_LABEL[item.lifecycle] || item.lifecycle) +
-          (item.active_version_id ? ' · v' + item.active_version_id : ' · 无生效版本')),
+          (item.active_version_id ? ' · v' + item.active_version_id : ' · 无生效版本') +
+          (item.visibility === 'model' ? ' · 🤖 模型可见' : ' · 👤 仅用户') +
+          (item.apply_90d ? ' · 90天用 ' + item.apply_90d + ' 次' : '')),
         h('div', { className: 'dsh-lit-muted' }, short(item.summary_l0 || item.description || item.slug, 70)))
     }))
 

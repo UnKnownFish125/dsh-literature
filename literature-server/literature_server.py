@@ -19,7 +19,10 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import literature_upstream as UP
-import literature_skill_routes as SKILL_ROUTES  # skill 管理体系路由（v0.2）  # 单服务合并：deepmemory 上游（search/libraries/list/graph）
+import literature_skill_routes as SKILL_ROUTES  # skill 管理体系路由（v0.2）
+import literature_chain_routes as CHAIN_ROUTES  # 认识演进链路由（阶段 3.1）
+import literature_job_routes as JOB_ROUTES  # 长任务监控路由（阶段 4.2）
+import literature_experiment_routes as EXP_ROUTES  # 实验裁决路由
 
 from literature_domain import (
     ConflictError,
@@ -31,7 +34,7 @@ from literature_domain import (
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+DATA_DIR = os.environ.get("LITERATURE_DATA_DIR") or os.path.join(BASE_DIR, "data")  # env 可覆盖，便于测试
 ATTACHMENT_DIR = os.path.join(DATA_DIR, "attachments")
 DB_PATH = os.path.join(DATA_DIR, "literature.db")
 API_TOKEN_FILE = os.environ.get("LITERATURE_API_TOKEN_FILE", os.path.join(DATA_DIR, "api-token"))
@@ -150,6 +153,45 @@ def _read_token(path):
             return fh.read().strip()
     except OSError:
         return ""
+
+
+def _libraries_payload(store):
+    """P23：GET /v1/literature/libraries 的响应装配（只读）。
+
+    形态固定：`{"libraries": [{"code","display_name","color","sort_order"}], "count": N}`。
+    事实源是 DB 的 `libraries` 表（热载）；老库没有该表时回退内置种子里程碑清单，
+    保证插件端**永远拿到非空列表**（不会 5xx、不会空数组导致白屏）。
+    """
+    items = store.library_catalog()
+    return {"libraries": items, "count": len(items)}
+
+
+def _library_upsert_payload(store, body):
+    """P23：POST /v1/literature/libraries —— 加/改一个库（**数据操作**，热载生效）。
+
+    body: {"code": "matsci2", "display_name": "材料科学·扩展", "color": "#0e8f84", "sort_order": 80}
+    返回: {"library": {code,display_name,color,sort_order}, "created": true|false}
+    · 库码格式非法 → DomainError → 400；`bias` 行可改显示名/配色，但 DB 守卫禁止删行/改码。
+    """
+    item, created = store.upsert_library(
+        body.get("code"), display_name=body.get("display_name") or "",
+        color=body.get("color") or "", sort_order=body.get("sort_order") or 0)
+    return {"library": item, "created": created}
+
+
+def _evidence_list_payload(store, kid, workspace_id, limit=0, max_chars=0):
+    """P18：GET /v1/literature/knowledge/<id>/evidence 的响应装配（只读）。
+
+    形态固定为 {"evidence": [...], "count": N}：
+      · count = 本次返回条数（limit=0 不限条数 ⇒ count 即该知识点关联的全部未软删证据数）
+      · limit>0 → 最多 N 条；max_chars>0 → 逐条截断 evidence_text
+        （截断元数据在每条里的 evidence_text_length / evidence_text_truncated）
+    """
+    items = store.list_evidence_for_knowledge(
+        int(kid), workspace_id=workspace_id,
+        limit=(int(limit) if int(limit) > 0 else None),
+        max_text_chars=(int(max_chars) if int(max_chars) > 0 else None))
+    return {"evidence": items, "count": len(items)}
 
 
 def _guess_mime(file_name):
@@ -296,6 +338,15 @@ class Handler(BaseHTTPRequestHandler):
             # 「拒浏览器 Origin(403)」与「校验 Bearer(401)」，放在它之前等于两者都绕过。
             if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
                 return
+            # 认识演进链路由：同样必须在鉴权之后
+            if CHAIN_ROUTES.try_handle(self, self.command, parts, qs):
+                return
+            # 长任务监控路由（同样在鉴权之后）
+            if JOB_ROUTES.try_handle(self, self.command, parts, qs):
+                return
+            # 实验裁决路由
+            if EXP_ROUTES.try_handle(self, self.command, parts, qs):
+                return
 
             # ==== kb 查询路由（单服务合并，deepmemory 上游，H2 kb-server 归入 6260）====
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "kb"] and parts[3] == "browse":
@@ -395,6 +446,16 @@ class Handler(BaseHTTPRequestHandler):
                 kid = int(parts[3])
                 return self._v2_call(lambda: self._send(200, {"knowledge": store.get_knowledge_item(
                     kid, workspace_id=qs.get("workspace_id", [""])[0])}))
+            if (len(parts) == 5 and parts[:3] == ["v1", "literature", "knowledge"]
+                    and parts[3].isdigit() and parts[4] == "evidence"):
+                # P18：按知识点列证据（只读；workspace 口径与 graph() 一致，含 bias 全局豁免）
+                # ?limit=N（0/缺省=不限） ?max_chars=N（0/缺省=不截断 evidence_text）
+                kid = int(parts[3])
+                ev_ws = qs.get("workspace_id", [""])[0]
+                ev_limit = int(qs.get("limit", ["0"])[0] or 0)
+                ev_max = int(qs.get("max_chars", ["0"])[0] or 0)
+                return self._v2_call(lambda: self._send(
+                    200, _evidence_list_payload(store, kid, ev_ws, ev_limit, ev_max)))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "documents":
                 return self._v2_call(lambda: self._send(200, {"documents": store.list_documents(
                     workspace_id=qs.get("workspace_id", [""])[0],
@@ -403,6 +464,9 @@ class Handler(BaseHTTPRequestHandler):
                     tags=[t for t in qs.get("tags", [""])[0].split(",") if t],
                     include_archived=qs.get("include_archived", ["false"])[0] == "true",
                 )}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "libraries":
+                # P23：库列表（事实源 = DB libraries 表；热载；老库回退内置种子）
+                return self._v2_call(lambda: self._send(200, _libraries_payload(store)))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "graph":
                 return self._v2_call(lambda: self._send(200, {"graph": store.graph(
                     workspace_id=qs.get("workspace_id", [""])[0],
@@ -425,6 +489,13 @@ class Handler(BaseHTTPRequestHandler):
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
             if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
                 return
+            # 长任务监控（POST：建任务 / tick / finish）
+            if parts and parts[0] == "v1" and len(parts) >= 3 and parts[2] == "jobs":
+                if JOB_ROUTES.try_handle(self, self.command, parts, qs, body=self._read_body()):
+                    return
+            if parts and parts[0] == "v1" and len(parts) >= 3 and parts[2] == "experiments":
+                if EXP_ROUTES.try_handle(self, self.command, parts, qs, body=self._read_body()):
+                    return
             store = get_store()
 
             # 附件上传：multipart/form-data
@@ -496,14 +567,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self._v2_call(lambda: self._send(200, {"category": store.create_category(body)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "documents":
                 return self._v2_call(lambda: self._send(200, {"document": store.create_document(body)}))
+            # P5：把已有的**一条** evidence 挂到**多个**知识点上。
+            # knowledge_ids 接受列表或单 id；knowledge_id 是单 id 的兼容写法。
+            if len(parts) == 5 and parts[:3] == ["v1", "literature", "evidence"] and parts[4] == "sources":
+                ids = body.get("knowledge_ids")
+                if ids is None:
+                    ids = body.get("knowledge_id")
+                return self._v2_call(lambda: self._send(200, store.link_evidence_sources(
+                    int(parts[3]), ids, workspace_id=str(body.get("workspace_id") or ""))))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "evidence":
-                return self._v2_call(lambda: self._send(200, {"evidence": store.create_evidence(body)}))
+                def _create_evidence():
+                    # P5：create_evidence 同 claim 幂等复用；reused/stance_* 是非表列元信息，摘出后返回
+                    ev = store.create_evidence(body)
+                    meta = {"reused": bool(ev.pop("reused", False)),
+                            "stance_conflict": bool(ev.pop("stance_conflict", False)),
+                            "stance_requested": ev.pop("stance_requested", None)}
+                    return self._send(200, {"evidence": ev, **meta})
+                return self._v2_call(_create_evidence)
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "archive-ingest":
                 mems = body.get("memories") or []
                 return self._v2_call(lambda: self._send(200, {"ingested": store.ingest_memory_archive(mems)}))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "archive-library":
                 lib = str(body.get("library") or "").strip()
-                if lib not in ("bias", "core", "eco", "project", "runtime"):
+                if lib not in store.library_codes():   # P23：运行期热载（DB libraries 表）
                     return self._send(400, {"error": f"invalid library: {lib}"})
                 return self._v2_call(lambda: self._send(200, {
                     "archived": lib, "count": store.archive_knowledge_library(
@@ -534,6 +620,9 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "claims":
                 return self._v2_call(lambda: self._send(200, {"claims": store.claims(
                     str(body.get("q") or ""), workspace_id=str(body.get("workspace_id") or ""))}))
+            if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "libraries":
+                # P23：加/改一个库 —— 数据操作，热载生效（无需改代码/迁移/重启）
+                return self._v2_call(lambda: self._send(200, _library_upsert_payload(store, body)))
             if len(parts) == 3 and parts[:2] == ["v1", "literature"] and parts[2] == "graph":
                 return self._v2_call(lambda: self._send(200, {"graph": store.graph(
                     workspace_id=str(body.get("workspace_id") or ""),
@@ -562,6 +651,10 @@ class Handler(BaseHTTPRequestHandler):
             parts = [urllib.parse.unquote(p) for p in path.strip("/").split("/")]
             if SKILL_ROUTES.try_handle(self, self.command, parts, qs):
                 return
+            # 实验裁决 PATCH（改状态 proposed→confirmed/retracted）
+            if parts and parts[0] == "v1" and len(parts) >= 3 and parts[2] == "experiments":
+                if EXP_ROUTES.try_handle(self, self.command, parts, qs, body=self._read_body()):
+                    return
             store = get_store()
             body = self._read_body()
             if len(parts) == 4 and parts[:3] == ["v1", "literature", "categories"]:
